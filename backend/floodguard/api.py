@@ -43,6 +43,12 @@ def _spec(ds_id):
     return DATASETS[ds_id]
 
 
+def _writable():
+    if config.READ_ONLY:
+        raise HTTPException(403, "This hosted demo is read-only. Import datasets and run new "
+                                 "experiments on a local install (see README).")
+
+
 def _num(a):
     """JSON-safe list (NaN/inf -> None), rounded."""
     a = np.asarray(a)
@@ -73,6 +79,7 @@ def datasets():
 @app.post("/api/datasets/{ds_id}/import")
 def start_import(ds_id: str):
     spec = _spec(ds_id)
+    _writable()
     key = f"import:{ds_id}"
     if _jobs.get(key, {}).get("state") == "running":
         return _jobs[key]
@@ -241,6 +248,7 @@ def experiments():
 @app.post("/api/experiments")
 def start_experiment(req: ExperimentRequest):
     _spec(req.dataset)
+    _writable()
     if not is_loaded(req.dataset):
         raise HTTPException(409, "dataset not imported")
     scen = req.scenarios or list(SCENARIOS)

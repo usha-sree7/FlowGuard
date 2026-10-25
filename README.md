@@ -49,6 +49,19 @@ For frontend development with hot reload, keep uvicorn running and also run `cd 
 
 Datasets can also be imported from the UI: **Dataset Explorer → Import dataset**. If the download fails, the UI shows manual-download instructions.
 
+## Hosted demo
+
+Live (read-only): **https://floodguard-ai-chi.vercel.app**. It bundles the processed datasets and the saved experiment summaries; importing datasets and running new experiments are disabled there, so do those locally.
+
+To redeploy after changes (needs the Vercel CLI):
+
+```bash
+python deploy/build_vercel.py          # assembles deploy/build/ (gitignored)
+cd deploy/build && vercel deploy --prod
+```
+
+A full explanation of the project for reviews and interviews is in `docs/FloodGuard_Project_Guide.pdf`.
+
 ## Tests
 
 ```bash

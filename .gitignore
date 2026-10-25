@@ -7,3 +7,8 @@ __pycache__/
 node_modules/
 frontend/dist/
 .venv/
+
+# Vercel deploy build output
+deploy/build/
+deploy/.vercel-link/
+.vercel

@@ -13,6 +13,8 @@ DATA_DIR = ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"          # original files exactly as downloaded (never modified)
 PROCESSED_DIR = DATA_DIR / "processed"  # derived, standardised copies
 RESULTS_DIR = ROOT / "results"
+# Hosted demo (read-only filesystem, no background jobs): imports and new experiments are disabled.
+READ_ONLY = os.environ.get("FLOODGUARD_READONLY") == "1"
 
 # Uncertainty index U = 100 * (wQ*Q + wD*D + wF*F). Provisional, not calibrated.
 U_WEIGHTS = {"Q": 0.40, "D": 0.30, "F": 0.30}
