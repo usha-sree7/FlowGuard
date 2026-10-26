@@ -10,6 +10,7 @@ import traceback
 from functools import lru_cache
 
 import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -277,6 +278,46 @@ def experiment(run_id: str):
         return load_run(run_id)
     except FileNotFoundError:
         raise HTTPException(404, "run not found")
+
+
+# --------------------------------------------------------------------------- model comparison
+MODEL_INFO = {
+    "threshold": ("Threshold alarm", "original", "Class of the current level vs. the station thresholds."),
+    "t1_fis": ("Type-1 FIS", "original", "Same 64 rules with Type-1 MFs, crisp inputs."),
+    "it2_fis": ("IT2FIS", "original", "Interval Type-2 FIS, Karnik-Mendel type reduction, crisp inputs."),
+    "proposed": ("Reliability fusion + IT2FIS", "original", "Per-sensor reliability, weighted fusion, IT2FIS."),
+    "anfis": ("ANFIS", "new", "First-order Sugeno neuro-fuzzy system, hybrid LSE + gradient learning."),
+    "fcm_tsk": ("FCM-TSK", "new", "Fuzzy C-means clusters, one zero-order TSK rule per cluster."),
+    "ga_it2": ("GA-tuned IT2FIS", "new", "IT2FIS anchors and FOU width tuned by a genetic algorithm."),
+    "pso_it2": ("PSO-tuned IT2FIS", "new", "IT2FIS anchors and FOU width tuned by particle swarm optimisation."),
+}
+COMPARE_METRICS = ("f1", "precision", "recall", "fpr", "macro_f1_4class", "swe")
+
+
+@app.get("/api/comparison/{ds_id}")
+def comparison(ds_id: str):
+    _spec(ds_id)
+    f = config.RESULTS_DIR / f"model_comparison_{ds_id}.csv"
+    if not f.exists():
+        raise HTTPException(404, f"no comparison yet: run scripts/compare_models.py {ds_id}")
+    df = pd.read_csv(f)
+    g = df.groupby(["system", "scenario"])[list(COMPARE_METRICS)]
+    mean, sd = g.mean(), g.std().fillna(0.0)
+    scen = [s for s in SCENARIOS if s in df["scenario"].unique()]
+    models = []
+    for sysname in df["system"].unique():
+        base, fused = sysname.removesuffix("+fusion"), sysname.endswith("+fusion")
+        name, family, desc = MODEL_INFO.get(base, (base, "new", ""))
+        models.append({
+            "id": sysname, "name": name + (" + fusion" if fused else ""),
+            "family": "new+fusion" if fused else family,
+            "description": desc + (" Run on the reliability-weighted fused inputs." if fused else ""),
+            "per_scenario": {s: {m: round(float(mean.loc[(sysname, s), m]), 4) for m in COMPARE_METRICS}
+                             | {f"{m}_sd": round(float(sd.loc[(sysname, s), m]), 4) for m in COMPARE_METRICS}
+                             for s in scen},
+        })
+    return {"dataset": ds_id, "seeds": int(df["seed"].nunique()), "scenarios": scen,
+            "metrics": list(COMPARE_METRICS), "models": models}
 
 
 _dist = config.ROOT / "frontend" / "dist"

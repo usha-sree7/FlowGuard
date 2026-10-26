@@ -43,6 +43,8 @@ def main() -> None:
         for name in ("results.json", "summary.csv"):
             if (run / name).exists():
                 shutil.copy2(run / name, out / name)
+    for f in (ROOT / "results").glob("model_comparison_*.csv"):
+        shutil.copy2(f, BUILD / "bundle" / "results" / f.name)
     shutil.copytree(dist, BUILD / "public")
 
     if saved_link:

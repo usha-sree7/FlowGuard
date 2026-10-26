@@ -62,6 +62,21 @@ cd deploy/build && vercel deploy --prod
 
 A full explanation of the project for reviews and interviews is in `docs/FloodGuard_Project_Guide.pdf`.
 
+## Model comparison
+
+Besides the four original systems, four more soft-computing models are compared (`backend/floodguard/softcomputing.py`):
+ANFIS, FCM-TSK (fuzzy C-means rules), and the IT2FIS tuned by a genetic algorithm (GA-IT2FIS) or by particle swarm
+optimisation (PSO-IT2FIS). Each also runs on the reliability-fused inputs (`+fusion`). Tuning and model selection
+use only the last 20 % of the train split.
+
+```bash
+cd backend
+python scripts/compare_models.py bengalas --seeds 3   # ~3 min; writes results/MODEL_COMPARISON_bengalas.md + CSV
+python scripts/compare_models.py malwathu --seeds 3
+```
+
+The **Model Comparison** tab shows the results. You can select any subset of the 12 models, pick a metric and a scenario, and see the best model, a ranked bar chart, a leaderboard and a scenario heatmap.
+
 ## Tests
 
 ```bash

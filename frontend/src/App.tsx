@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
 import Dashboard from './pages/Dashboard'
+import Compare from './pages/Compare'
 import Experiments from './pages/Experiments'
 import Explorer from './pages/Explorer'
 import Model from './pages/Model'
@@ -10,6 +11,7 @@ const TABS = [
   { id: 'explorer', label: 'Dataset Explorer' },
   { id: 'model', label: 'IT2 Model' },
   { id: 'experiments', label: 'Experiments' },
+  { id: 'compare', label: 'Model Comparison' },
 ] as const
 
 type Tab = (typeof TABS)[number]['id']
@@ -70,6 +72,7 @@ export default function App() {
             {tab === 'explorer' && <Explorer onChanged={refresh} />}
             {tab === 'model' && <Model dataset={dataset} />}
             {tab === 'experiments' && <Experiments dataset={dataset} />}
+            {tab === 'compare' && <Compare key={dataset} dataset={dataset} />}
           </>
         )}
       </main>
