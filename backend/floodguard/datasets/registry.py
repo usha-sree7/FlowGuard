@@ -81,9 +81,9 @@ BENGALAS = DatasetSpec(
         "kind": "proxy",
         "description": "No observed flood/no-flood labels in the repository. The authors' uncertainty-analysis code "
         "defines a statistical 'flood threshold' = mean + 2*std of nivel_conselheiro (computed by them on the full "
-        "dataset). FloodGuard recomputes it on the chronological TRAIN split only and uses it as the Warning "
-        "threshold of a PROXY label on the FUTURE water level. Watch (mean+1sd) and Critical (mean+3sd) are "
-        "user-configured extensions, not from the paper.",
+        "dataset). HydroSentinel AI recomputes it on the chronological TRAIN split only and uses it as the High "
+        "threshold of a 5-level PROXY label on the FUTURE water level (Normal / Low / Moderate / High / Critical). "
+        "Low (mean+0.5sd), Moderate (mean+1sd) and Critical (mean+3sd) are project extensions, not from the paper.",
     },
     limitations=(
         "Proxy labels only: exceedance of a statistical level threshold, not observed flood impacts.",
@@ -93,7 +93,7 @@ BENGALAS = DatasetSpec(
         "Single water-level sensor: level faults cannot be cross-checked against a redundant level sensor.",
     ),
     unverified=(
-        "Paper full text (Wiley returned HTTP 403); journal volume/issue confirmed only via a MetaTOC listing.",
+        "Paper full text (Wiley returned HTTP 403). Authors, title, Transactions in GIS 30(2), article e70254 confirmed via the Crossref record of the DOI (2026-10-26).",
         "Brief states '>73,000 tuples'; the 30-min file actually has 72,011 rows (69,356 in the 6-h file).",
     ),
     level_bounds_m=(0.0, 10.0),
@@ -110,7 +110,7 @@ MALWATHU = DatasetSpec(
     licence="MIT (repository LICENSE, Copyright (c) 2023 namalhappy)",
     location="Malwathu Oya basin, Sri Lanka; water level at Kappachchiya; rain gauges Murunkan, Pavattakulam, "
     "Nachchiduva, Vavuniya, Mannar, Anuradhapura",
-    period_claimed="2005-2018 per paper (years only). The CSV has NO date column; FloodGuard uses a relative day index.",
+    period_claimed="2005-2018 per paper (years only). The CSV has NO date column; HydroSentinel AI uses a relative day index.",
     resolution="daily (per paper; files contain lag-structured rows, no timestamps)",
     step_hours=24.0,
     files=(
@@ -135,8 +135,8 @@ MALWATHU = DatasetSpec(
     label_info={
         "true_flood_labels": False,
         "kind": "proxy",
-        "description": "Paper reports no numeric flood/alert water levels. FloodGuard applies the same statistical "
-        "rule as the Bengalas proxy (train-split mean + k*sd of level, k=1,2,3) and labels it as a PROXY. "
+        "description": "Paper reports no numeric flood/alert water levels. HydroSentinel AI applies the same statistical "
+        "rule as the Bengalas proxy (train-split mean + k*sd of level, k=0.5,1,2,3) and labels it as a PROXY. "
         "It is used for a generalisation check only.",
     },
     limitations=(

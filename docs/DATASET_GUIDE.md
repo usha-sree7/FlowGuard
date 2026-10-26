@@ -62,13 +62,13 @@ The plausibility ranges are configured sanity bounds. They are **not** flood thr
 | Type | Used? | Definition |
 |---|---|---|
 | True observed flood labels | **Not available** in either source | none |
-| **Proxy labels** | Yes (evaluation) | Class of the **observed level `horizon` steps in the future**, from the ORIGINAL data, using thresholds computed on the train split: Watch μ+1σ, Warning μ+2σ, Critical μ+3σ. Horizon: 1 h for Bengalas, 1 day for Malwathu. |
+| **Proxy labels** | Yes (evaluation) | Class of the **observed level `horizon` steps in the future**, from the ORIGINAL data, using thresholds computed on the train split: Low μ+0.5σ, Moderate μ+σ, High μ+2σ, Critical μ+3σ. Horizons: 30 min, 1 h, 3 h for Bengalas; 1 day for Malwathu. |
 | Synthetic demo labels | Not used | none |
 
 Threshold sources:
 
-* **Warning = μ+2σ** is the statistical "flood threshold" rule in Soares et al.'s `uncertainty-analysis/main.py`. The authors computed it on the full data; FloodGuard uses the train split only.
-* **Watch = μ+1σ** and **Critical = μ+3σ** are user-configured extensions. They are not from either paper.
+* **High = μ+2σ** is the statistical "flood threshold" rule in Soares et al.'s `uncertainty-analysis/main.py`. The authors computed it on the full data; HydroSentinel AI uses the train split only.
+* **Low = μ+0.5σ**, **Moderate = μ+1σ** and **Critical = μ+3σ** are project extensions. They are not from either paper. Alert = High or Critical.
 * Bengalas thresholds: 1.137 / 1.427 / 1.716 m. Malwathu thresholds: 0.572 / 1.002 / 1.433 m.
 
 **Circularity check.** The threshold baseline applies the same thresholds to the *current* level, so evaluating it on the *future* level is a persistence test, not a self-consistency test. All systems predict a future quantity they never see.
@@ -78,11 +78,11 @@ Threshold sources:
 * `mode="full"` uses all rows.
 * `mode="sample"` uses a **seeded contiguous block** (default 10,000 rows) so time order is kept.
 
-**Caveat (measured):** in a sample, the thresholds and anchors are recalibrated on a short training window. For seed 42 that window was Jul–Dec 2019, which gave a Warning threshold of 1.15 m vs 1.43 m on the full train split. Sample results are therefore **not comparable** to full-mode results. Use sample mode only for quick demos.
+**Caveat (measured):** in a sample, the thresholds and anchors are recalibrated on a short training window. For seed 42 that window was Jul–Dec 2019, which gave a μ+2σ threshold of 1.15 m vs 1.43 m on the full train split. Sample results are therefore **not comparable** to full-mode results. Use sample mode only for quick demos.
 
 ## Limitations
 
 * Proxy labels only. Results say nothing about observed flood damage.
 * Bengalas rain units and timezone are undocumented. Malwathu rain unit is ambiguous (cm vs mm) and has no dates.
 * There is a single level sensor per site, so level faults cannot be cross-checked against a redundant level gauge.
-* Malwathu is daily, which is too coarse for flash-flood dynamics. It has only 66 positive (≥ Warning) test labels.
+* Malwathu is daily, which is too coarse for flash-flood dynamics. It has only 66 positive (≥ High) test labels.

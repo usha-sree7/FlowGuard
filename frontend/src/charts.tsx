@@ -132,3 +132,86 @@ export function Meter({ value, max = 1, color, label }: { value: number | null; 
     </div>
   )
 }
+
+// Semicircle risk gauge: five coloured bands (Normal / Low / Moderate / High / Critical) and a needle at the score.
+export function Gauge({ score, label, color, size = 260 }: { score: number | null; label: string; color: string; size?: number }) {
+  const cx = 130, cy = 120, r = 100
+  const pt = (v: number, rr = r) => {
+    const a = Math.PI * (1 - v / 100)
+    return [cx + rr * Math.cos(a), cy - rr * Math.sin(a)]
+  }
+  const arc = (a: number, b: number) => {
+    const [x1, y1] = pt(a), [x2, y2] = pt(b)
+    return `M${x1},${y1} A${r},${r} 0 0 1 ${x2},${y2}`
+  }
+  const s = score === null || !Number.isFinite(score) ? 0 : Math.max(0, Math.min(100, score))
+  const [nx, ny] = pt(s, r - 18)
+  const bands = ['var(--risk0)', 'var(--risk1)', 'var(--risk2)', 'var(--risk3)', 'var(--risk4)']
+  return (
+    <svg viewBox="0 0 260 150" width="100%" style={{ maxWidth: size }} role="img" aria-label={`risk ${label}`}>
+      {bands.map((c, i) => <path key={i} d={arc(i * 20 + 0.8, (i + 1) * 20 - 0.8)} stroke={c} strokeWidth={20} fill="none" opacity={0.85} />)}
+      <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--fg)" strokeWidth={4} strokeLinecap="round" />
+      <circle cx={cx} cy={cy} r={7} fill="var(--fg)" />
+      <text x={cx} y={cy + 28} textAnchor="middle" fontSize={22} fontWeight={700} fill={color}>{label}</text>
+    </svg>
+  )
+}
+
+// Grouped horizontal bars: one group per category, one bar per series (values 0..max), optional error whiskers.
+export function GroupedBars({ groups, series, max = 1, digits = 3 }: {
+  groups: { label: string; values: (number | null)[]; lo?: (number | null)[]; hi?: (number | null)[] }[]
+  series: { label: string; color: string }[]
+  max?: number
+  digits?: number
+}) {
+  const W = 760, labelW = 150, valW = 52, barH = 13, gap = 3, groupGap = 12
+  const plotW = W - labelW - valW - 8
+  const gh = series.length * (barH + gap) + groupGap
+  const H = groups.length * gh + 18
+  const x = (v: number) => labelW + Math.max(0, Math.min(1, v / max)) * plotW
+  return (
+    <figure className="chart">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="bar chart">
+        {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+          <g key={f}>
+            <line x1={x(f * max)} x2={x(f * max)} y1={0} y2={H - 16} className="grid" />
+            <text x={x(f * max)} y={H - 4} textAnchor="middle" className="tick">{(f * max).toFixed(2)}</text>
+          </g>
+        ))}
+        {groups.map((g, gi) => (
+          <g key={g.label} transform={`translate(0, ${gi * gh})`}>
+            <text x={labelW - 8} y={(series.length * (barH + gap)) / 2 + 4} textAnchor="end" fontSize={12} fill="var(--fg)">{g.label}</text>
+            {series.map((s, si) => {
+              const v = g.values[si]
+              const y = si * (barH + gap)
+              if (v === null || !Number.isFinite(v)) return null
+              const lo = g.lo?.[si], hi = g.hi?.[si]
+              return (
+                <g key={s.label}>
+                  <rect x={labelW} y={y} width={Math.max(1, x(v) - labelW)} height={barH} rx={2} fill={s.color} opacity={0.88}>
+                    <title>{`${g.label} · ${s.label}: ${v.toFixed(digits)}`}</title>
+                  </rect>
+                  {lo != null && hi != null && <line x1={x(lo)} x2={x(hi)} y1={y + barH / 2} y2={y + barH / 2} stroke="var(--fg)" strokeWidth={1.2} />}
+                  <text x={W - valW + 4} y={y + barH - 2} fontSize={11} className="tick" fill="var(--muted)">{v.toFixed(digits)}</text>
+                </g>
+              )
+            })}
+          </g>
+        ))}
+      </svg>
+      <figcaption className="legend" style={{ paddingLeft: labelW / 5 }}>
+        {series.map((s) => <span key={s.label}><i style={{ background: s.color, height: 8 }} />{s.label}</span>)}
+      </figcaption>
+    </figure>
+  )
+}
+
+// Row of coloured cells, one per time step (alert level per step).
+export function Strip({ name, values, colors }: { name: string; values: (number | null)[]; colors: string[] }) {
+  return (
+    <div className="strip-row">
+      <span className="strip-name" title={name}>{name}</span>
+      <span className="strip">{values.map((v, i) => <i key={i} style={{ background: v === null ? 'var(--border)' : colors[v] }} />)}</span>
+    </div>
+  )
+}

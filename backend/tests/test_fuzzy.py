@@ -65,14 +65,23 @@ def test_km_reduces_to_type1_when_no_uncertainty():
 
 def test_rule_base_complete_and_unique():
     keys = [(L, R, P) for L, R, P, _ in RULES]
-    assert len(keys) == 64 and len(set(keys)) == 64
-    assert set(keys) == set(itertools.product(range(4), repeat=3))
-    assert len(rule_table()) == 64
+    assert len(keys) == 80 and len(set(keys)) == 80
+    assert set(keys) == set(itertools.product(range(5), range(4), range(4)))
+    assert len(rule_table()) == 80
+    # the level term alone sets the class when rise is steady and rain is light
+    assert [s for L, R, P, s in RULES if R == 1 and P == 1] == [0, 1, 2, 3, 4]
+
+
+def test_partition_with_four_anchors_gives_five_terms_and_survives_full_fou():
+    terms, delta, _ = partition([1.0, 1.5, 2.0, 3.0], [1.0] * 4, 0, 10)  # eps clipped to delta / 2
+    xs = np.linspace(0, 10, 4001)
+    assert len(terms) == 5
+    np.testing.assert_allclose(sum(t.embedded(xs) for t in terms), 1.0, atol=1e-9)
 
 
 def _fis():
     mfs = {
-        "level": partition([1.0, 1.5, 2.0], [0.05] * 3, 0, 10)[0],
+        "level": partition([0.8, 1.0, 1.5, 2.0], [0.05] * 4, 0, 10)[0],
         "rise": partition([-0.1, 0.2, 0.8], [0.02] * 3, -3, 3)[0],
         "rain": partition([1.0, 6.0, 15.0], [0.3] * 3, 0, 100)[0],
     }
@@ -81,7 +90,8 @@ def _fis():
 
 def test_risk_monotone_in_level():
     """Type-1 output is monotone. IT2 (KM midpoint) monotonicity is NOT guaranteed by a monotone rule base
-    alone; measured violations are ~0.03 points on the 0-100 scale, so a 0.1-point tolerance is asserted."""
+    alone; with the FOU capped at half the ramp (mf.partition) measured violations stay below 0.1 point on the
+    0-100 scale, so a 0.1-point tolerance is asserted."""
     fis = _fis()
     lv = np.linspace(0.5, 3.0, 2000)
     for rise, rain in [(0.0, 0.0), (0.3, 7.0), (1.0, 20.0), (0.1, 3.0)]:

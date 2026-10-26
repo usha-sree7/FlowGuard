@@ -3,7 +3,7 @@ import numpy as np
 from floodguard import uncertainty
 from floodguard.calibration import calibrate, split
 from floodguard.faults import SCENARIOS, inject
-from floodguard.metrics import binary, ordinal
+from floodguard.metrics import binary, block_bootstrap_f1, evaluate, ordinal
 from floodguard.reliability import assess
 from floodguard.systems import proxy_labels
 
@@ -87,5 +87,17 @@ def test_metrics():
     b = binary([1, 1, 0, 0], [1, 0, 1, 0])
     assert (b["tp"], b["fp"], b["fn"], b["tn"]) == (1, 1, 1, 1) and b["f1"] == 0.5
     o = ordinal([0, 3, 2], [1, 1, 2])
-    assert o["confusion_matrix"][3][1] == 1
+    assert o["confusion_matrix"][3][1] == 1 and len(o["confusion_matrix"]) == 5
     assert o["severity_weighted_error"] == (1 + 4 + 0) / 3
+    assert ordinal([0, 1, 2, 3, 4], [0, 1, 2, 3, 4])["kappa"] == 1.0
+    ev = evaluate([2, 3, 4, 0], [3, 3, 2, 0])  # alert = High (3) or Critical (4)
+    assert (ev["binary_alert"]["tp"], ev["binary_alert"]["fp"], ev["binary_alert"]["fn"]) == (1, 1, 1)
+
+
+def test_block_bootstrap_ci_brackets_point_estimate():
+    rng = np.random.default_rng(0)
+    y = np.repeat(rng.integers(0, 5, 200), 10).astype(float)
+    p = np.where(rng.random(len(y)) < 0.9, y, 0)
+    f1 = evaluate(y, p)["binary_alert"]["f1"]
+    lo, hi = block_bootstrap_f1(y, p, block=10, n_boot=300)
+    assert lo <= f1 <= hi and hi - lo > 0

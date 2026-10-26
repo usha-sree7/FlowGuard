@@ -1,5 +1,22 @@
 # Experiment Protocol and Preliminary Results
 
+> **Current protocol (v0.6): `backend/scripts/compare_models.py`.** Section 1 below still applies for data, split, fitting, labels and
+> fault injection, with these changes:
+> * **Models.** IT2FIS, PSO-tuned IT2FIS, SOM and ANFIS, plus the threshold rule as a reference. Each runs on raw inputs and on the
+>   reliability-fused inputs (reliability layer on/off).
+> * **Validation block.** The training split has a fit block (first 80 %) and a validation block (last 20 %). SOM grid, ANFIS ridge and the
+>   PSO genes are chosen on the validation block. Fit rows whose horizon target lies in the validation block are purged.
+> * **Labels.** 5 levels (Normal / Low / Moderate / High / Critical) from train-split μ + 0.5 / 1 / 2 / 3 σ; alert = High or Critical.
+> * **Horizons.** 30 min, 1 h and 3 h (Bengalas); 1 day (Malwathu). Unsupported horizons are reported, not approximated.
+> * **Scenarios.** clean + missing_10, missing_30, noise_low / med / high, stuck, conflict, spikes, combined; 3 fault seeds
+>   (20261025, 20262025, 20263025). Clean data is evaluated once (it does not depend on the seed).
+> * **Metrics.** Alert precision / recall / F1 / FPR, missed alerts, false alarms; 5-level macro F1, accuracy, Cohen's κ, severity-weighted
+>   error; 95 % moving-block-bootstrap interval of clean alert F1 (1,000 resamples, block 1 day / 14 days); fit and inference time.
+> * **Model selection rule for claims.** A model is called better only when its F1 interval does not overlap the other's.
+>
+> Results: `results/MODEL_COMPARISON_<dataset>.md` and `results/comparison_<dataset>.json`. Sections 1–4 below describe the original v0.4
+> four-system experiment (`run_experiment.py`), kept for history.
+
 ## 1. Protocol
 
 **Data.** The processed copy of the original data is used; its SHA-256 is recorded in every `results.json`.
@@ -72,6 +89,14 @@ python scripts/results_tables.py <run_id> --sweep bengalas   # Markdown tables b
 **v0.4 (current).** The risk class comes from the IT2FIS applied to reliability-weighted fused **point** estimates. The interval inputs are propagated separately to give a *plausible risk range* [yl, yr], which feeds only the uncertainty index. Two further changes were made: the persistence prior became a causal median of trustworthy readings, and the missing-level growth scale became the q95 step.
 
 **Caveat:** this revision was made **after** seeing v0.3 test-split results. The v0.4 numbers are therefore not a fully blind evaluation. A future protocol should make design decisions on a validation block carved from the training period.
+
+**v0.6 (disclosed).** Three v0.6 design changes were made during development, after some v0.6 test numbers had been printed:
+* **FOU cap (ε ≤ δ/2).** Triggered by a monotonicity check of the fitted IT2FIS (a higher level gave a lower alert), not by a score.
+  Malwathu test results of the uncapped version had been seen at that point.
+* **ANFIS premise constraints.** Triggered by meaningless rule names in the ANFIS explanations (fuzzy sets out of order). The change
+  *lowered* ANFIS's Malwathu test F1 (0.83 → 0.66) and was kept anyway, because interpretability was the reason for the change.
+* **Trapezoid rounding fix.** A crash, not a modelling choice.
+No hyper-parameter was chosen by test score. The final Bengalas comparison was run once, after all three changes.
 
 ## 3. Results (v0.4, measured)
 

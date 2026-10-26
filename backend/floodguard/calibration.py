@@ -12,7 +12,7 @@ import pandas as pd
 
 from .fuzzy import FIS, partition
 
-LEVEL_K = (1.0, 2.0, 3.0)  # Watch, Warning (paper rule), Critical
+LEVEL_K = (0.5, 1.0, 2.0, 3.0)  # Low, Moderate, High (paper rule), Critical
 
 
 @dataclass
@@ -39,7 +39,7 @@ class Calibration:
     cfg: RunConfig
     level_mean: float
     level_sd: float
-    thresholds: list            # [Watch, Warning, Critical] in metres
+    thresholds: list            # [Low, Moderate, High, Critical] lower edges in metres
     threshold_source: dict
     rain_bias: dict             # multiplicative bias per sensor (radar -> gauge scale); 1.0 otherwise
     anchors: dict               # input -> 3 crossover anchors
@@ -78,10 +78,10 @@ def rain_matrix(df: pd.DataFrame, cfg: RunConfig, bias: dict) -> np.ndarray:
     return np.column_stack([df[f"rain__{s}"].to_numpy(float) * bias.get(s, 1.0) for s in cfg.rain_sensors])
 
 
-def _anchor_se(values_by_block: list[np.ndarray], fn) -> np.ndarray:
+def _anchor_se(values_by_block: list[np.ndarray], fn, n: int = 3) -> np.ndarray:
     est = np.array([fn(v) for v in values_by_block if len(v) > 10])
     if len(est) < 2:
-        return np.zeros(3)
+        return np.zeros(n)
     return est.std(axis=0, ddof=1) / np.sqrt(len(est))
 
 
@@ -108,7 +108,7 @@ def calibrate(train: pd.DataFrame, cfg: RunConfig) -> Calibration:
         anchors["rise"][1] = max(anchors["rise"][2] / 3, 1e-3)
     by = lambda a: [a[blk == b] for b in np.unique(blk)]  # noqa: E731
     eps = {
-        "level": _anchor_se(by(lvl), level_q),
+        "level": _anchor_se(by(lvl), level_q, len(LEVEL_K)),
         "rise": _anchor_se(by(rise), rise_q),
         "rain": _anchor_se(by(acc), wet_q),
     }
@@ -155,10 +155,11 @@ def calibrate(train: pd.DataFrame, cfg: RunConfig) -> Calibration:
     return Calibration(
         cfg=cfg, level_mean=mu, level_sd=sd, thresholds=thresholds,
         threshold_source={
-            "Warning": "mean + 2*sd of train-split level: statistical 'flood threshold' rule in the UAE-ML "
-                       "uncertainty-analysis code (authors computed it on the full dataset)",
-            "Watch": "mean + 1*sd - user-configured extension (not from the paper)",
-            "Critical": "mean + 3*sd - user-configured extension (not from the paper)",
+            "Low": "mean + 0.5*sd - project extension (not from the paper)",
+            "Moderate": "mean + 1*sd - project extension (not from the paper)",
+            "High": "mean + 2*sd of train-split level: statistical 'flood threshold' rule in the UAE-ML "
+                    "uncertainty-analysis code (authors computed it on the full dataset)",
+            "Critical": "mean + 3*sd - project extension (not from the paper)",
         },
         rain_bias=bias, anchors={k: v.tolist() for k, v in anchors.items()},
         fou_eps={k: v.tolist() for k, v in eps.items()}, bounds=bounds, rel=rel,

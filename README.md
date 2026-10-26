@@ -1,136 +1,103 @@
-# FloodGuard AI
+# HydroSentinel AI
 
-**Reliability-Aware Sensor Fusion Using Interval Type-2 Fuzzy Logic for Flood-Risk Detection** (Soft Computing course project).
+**Five-level flood-risk alerts from four soft-computing techniques (IT2FIS, PSO-tuned IT2FIS, SOM, ANFIS), compared on real river data, with sensor-reliability simulation** (Soft Computing course project; previously named *FloodGuard AI*).
 
 ```
-rainfall (gauge, radar / multi-gauge), water level, derived rise rate
-  → per-sensor reliability assessment (missing, spike, stuck, noise, inconsistency, device health)
-  → reliability-weighted fusion (point estimates + intervals that keep unresolved uncertainty)
-  → Interval Type-2 FIS (FOU, interval firing, 64 rules, Karnik–Mendel type reduction)
-  → TWO SEPARATE OUTPUTS:  flood risk  Normal / Watch / Warning / Critical
-                           uncertainty status  Confident / Uncertain / Insufficient data  (+ index U)
-  → replay dashboard with alarms, model inspection, experiments
+sensors (water level, rain gauge / radar / several gauges)
+  → [optional] reliability layer: check each reading (missing, spike, stuck, noisy, out-of-range, conflict) and fuse
+  → 3 inputs: water level, rate of rise, recent rainfall
+  → IT2FIS │ PSO-tuned IT2FIS │ SOM │ ANFIS          (identical inputs, run side by side)
+  → alert level Normal / Low / Moderate / High / Critical  +  the reasons, built from each model's internals
 ```
 
-Real data (audited, see `docs/PAPER_DATASET_AUDIT.md`):
+## The four techniques (all implemented here, all evaluated on the same held-out data)
 
-* **Bengalas River, Brazil.** 72,011 × 30-min records, 2019–2023, from the UAE-ML repository of Soares et al. (TGIS 2026).
-* **Malwathu Oya, Sri Lanka.** 4,765 daily records, from Rathnayake et al. (PLOS ONE 2023).
+| Technique | What it does | What is learned, from which data | Code |
+|---|---|---|---|
+| **IT2FIS** | 80 expert IF-THEN rules; Interval Type-2 fuzzy sets; Karnik–Mendel type reduction → risk 0–100 | nothing from labels: set positions from train-split statistics | `fuzzy/`, `calibration.py` |
+| **PSO-tuned IT2FIS** | same rules; particle swarm moves the 10 crossover points and scales the FOU | 11 genes per horizon, objective = validation alert F1 + 0.25 × macro F1 | `tuning.py` |
+| **SOM** | 2-D map of prototype river states; node → alert level by minimum expected cost | prototypes (fit block), node levels (fit labels), grid size (validation) | `patterns.py` |
+| **ANFIS** | 80 first-order TSK rules, Gaussian MFs, hybrid LS + gradient learning | MFs + 320 consequents (fit block), ridge (validation) | `anfis.py` |
+| *Threshold rule* | *reference only*: alert level of the current level (the labels are built from it) | thresholds | `systems.py` |
 
-**Only proxy labels exist.** These are future level exceedances of statistical thresholds, not observed flood records. Risk scores are not probabilities, and U is not a calibrated error probability.
+The **reliability layer** (`reliability.py`, `fusion.py`, `uncertainty.py`) can be switched on for any model; it also gives a confidence status (Confident / Uncertain / Insufficient data).
+How PSO, SOM and ANFIS work mathematically: `docs/MATHEMATICAL_MODEL.md` §5.
 
-## Requirements
+## Data (see `DATASET_DOCUMENTATION.md` and `REFERENCES.md`)
 
-* Python ≥ 3.11 (tested on 3.13)
-* Node ≥ 18 (tested on 24)
-* About 200 MB of disk for the data
+* **Bengalas River, Petrópolis, Brazil** (primary): 72,011 × 30-min records, 2019-01-04 14:30 → 2023-12-31 16:00, station 221342310, from the MIT-licensed UAE-ML repository of Soares et al., *Transactions in GIS* 30(2) e70254 (2026), doi:10.1111/tgis.70254. Water level [m], station rain gauge and a 504-cell weather-radar grid (rain units not documented in the source).
+* **Malwathu Oya, Sri Lanka** (generalisation check): 4,765 daily records (2005–2018, no dates in the file) from Rathnayake et al., *PLOS ONE* 18(4) e0282847 (2023).
+* **Labels are proxies.** No flood events are recorded. The label is the alert level of the water level *actually observed* h steps later, using train-split thresholds μ + 0.5 / 1 / 2 / 3 σ (Bengalas 0.993 / 1.137 / 1.427 / 1.716 m). **Alert = High or Critical** (≥ μ + 2σ, the paper's flood-threshold rule).
+* **Horizons (checked):** Bengalas supports 30 min, 1 h and 3 h. Malwathu is daily, so only 1 day is supported; sub-daily horizons are reported as unsupported.
+* Indian sources (IMD, CWC, India-WRIS, NWDP, CAMELS-IND) were checked: none offers open, co-located sub-daily level + rain data.
 
-## Setup and start
+## Results (held-out test period; full tables in `results/MODEL_COMPARISON_*.md`)
+
+Bengalas, **1 h ahead**, raw inputs, alert F1 with 95 % block-bootstrap interval:
+
+| Model | Clean F1 [95 % CI] | Precision / Recall | Missed / false alarms | Mean F1 over 9 faults | Spikes: layer off → on |
+|---|---|---|---|---|---|
+| IT2FIS | 0.887 [0.850, 0.915] | 0.866 / 0.910 | 59 / 92 | 0.794 | 0.755 → 0.821 |
+| PSO-tuned IT2FIS | 0.894 [0.859, 0.922] | 0.901 / 0.888 | 73 / 64 | 0.791 | 0.756 → 0.809 |
+| SOM | 0.737 [0.665, 0.796] | 0.617 / 0.914 | 56 / 371 | 0.497 | 0.534 → 0.626 |
+| ANFIS | 0.867 [0.820, 0.902] | 0.830 / 0.907 | 61 / 121 | 0.649 | 0.651 → 0.750 |
+| *Threshold (reference)* | *0.862 [0.820, 0.895]* | *0.858 / 0.867* | *87 / 94* | *0.796* | *0.739 → 0.799* |
+
+What the numbers support:
+
+* **IT2FIS, PSO-IT2FIS and ANFIS are statistically tied on clean data** (overlapping intervals). SOM is clearly weaker: it raises many false alarms (371 vs 92 for IT2FIS), consistent with its cost-based node mapping, which deliberately errs towards the higher level when a node holds mixed states.
+* **PSO** improves test F1 at every Bengalas horizon (+0.009 / +0.007 / +0.031 at 30 min / 1 h / 3 h), but never beyond the confidence interval. Its main effect is fewer false alarms at the cost of slightly more missed alerts. On Malwathu it raises validation fitness but leaves test F1 unchanged (0.864).
+* **Robustness:** the IT2 models degrade least under simulated faults. ANFIS collapses under noise (F1 0.41 at medium, 0.19 at high noise at 1 h); the cause has not been isolated.
+* **Reliability layer:** clearly helps against spikes for every model and helps ANFIS under noise. It costs a little on clean data and with missing readings. Its checks detect missing data almost perfectly but catch few stuck (3 %) or conflicting-rain (1 %) faults.
+* **Lead time:** skill falls with horizon for every model (IT2FIS 0.935 → 0.887 → 0.664). At 3 h the level class changes on 10 % of steps, versus 2.7 % at 30 min.
+* **Daily data (Malwathu, 1 day):** IT2FIS = PSO-IT2FIS 0.864, SOM 0.820, ANFIS 0.661 (very wide interval: only 66 alert days in the test period).
+
+## Requirements and setup
+
+Python ≥ 3.11 (tested 3.13), Node ≥ 18 (tested 24).
 
 ```bash
-# backend
 cd backend
 pip install -r requirements.txt
 python scripts/import_dataset.py bengalas     # download (41.5 MB) + checksum + validate
 python scripts/import_dataset.py malwathu
+python scripts/compare_models.py malwathu --seeds 3   # ~20 s
+python scripts/compare_models.py bengalas --seeds 3   # ~11 min; the website reads these results
+python scripts/write_references.py                    # regenerates REFERENCES.md
 
-# frontend (build once; the backend serves it)
 cd ../frontend
 npm install
 npm run build
 
-# run the full app
 cd ../backend
 python -m uvicorn floodguard.api:app --port 8000
-# open http://127.0.0.1:8000
+# open http://127.0.0.1:8000  (the first Assess Risk load refits the models on train data: ~1-2 min on Bengalas)
 ```
 
-For frontend development with hot reload, keep uvicorn running and also run `cd frontend && npm run dev`, then open http://localhost:5173 (`/api` is proxied).
+Dev mode: keep uvicorn running, then `cd frontend && npm run dev` and open http://localhost:5173.
 
-Datasets can also be imported from the UI: **Dataset Explorer → Import dataset**. If the download fails, the UI shows manual-download instructions.
+## Website (four tabs)
 
-## Hosted demo
-
-Live (read-only): **https://floodguard-ai-chi.vercel.app**. It bundles the processed datasets and the saved experiment summaries; importing datasets and running new experiments are disabled there, so do those locally.
-
-To redeploy after changes (needs the Vercel CLI):
-
-```bash
-python deploy/build_vercel.py          # assembles deploy/build/ (gitignored)
-cd deploy/build && vercel deploy --prod
-```
-
-A full explanation of the project for reviews and interviews is in `docs/FloodGuard_Project_Guide.pdf`.
-
-## Model comparison
-
-Besides the four original systems, four more soft-computing models are compared (`backend/floodguard/softcomputing.py`):
-ANFIS, FCM-TSK (fuzzy C-means rules), and the IT2FIS tuned by a genetic algorithm (GA-IT2FIS) or by particle swarm
-optimisation (PSO-IT2FIS). Option A (`backend/floodguard/neural.py`) adds a GA + SOM + ANN hybrid, built in three
-stages so the effect of each part is measured: ANN, SOM + ANN, GA + SOM + ANN. Every model also runs on the reliability-fused inputs (`+fusion`), 18 in total. Tuning and model selection
-use only the last 20 % of the train split.
-
-```bash
-cd backend
-python scripts/compare_models.py bengalas --seeds 3   # ~6 min; writes results/MODEL_COMPARISON_bengalas.md,
-                                                      # model_comparison_bengalas{.csv,_best.json}, best_model_output_bengalas.csv
-python scripts/compare_models.py malwathu --seeds 3
-```
-
-The **Model Comparison** tab shows the overall best model (metrics, confusion matrix, output around the largest flood peak). You can also select any subset of the 18 models, pick a metric and a scenario, and see the best model, a ranked bar chart, a leaderboard and a scenario heatmap.
+| Tab | What it shows |
+|---|---|
+| Overview | What the system does, pipeline diagram, the five alert levels with thresholds in metres, how each technique works (inputs, outputs, what is learned), key results, caveats |
+| Assess Risk | **Historical replay** of real test-period flood episodes: level / rain / rise charts, per-step alert strips for every model, the alert each model issues at any chosen step with its reasons, and what actually happened h later. **What-if** inputs with simulated sensor conditions. Horizon and reliability-layer controls on both |
+| Compare Models | Metrics table with confidence intervals, fit and inference time; precision / recall / F1 chart; F1 by horizon; per-level F1; confusion matrices; **PSO vs untuned IT2FIS** (objective, convergence, moved crossover points, tuned MF curves) |
+| Dataset & Sensor Reliability | Dataset name, DOI, repository and download link, location, timestamps, units, label generation, split; full-period charts of level, rainfall and rise rate; **horizon support check**; **fault simulator** (missing, noisy, stuck, conflicting, spikes, combined) with corrupted signals, per-model strips, and scores with the reliability layer off vs on |
 
 ## Tests
 
 ```bash
-cd backend && python -m pytest -q        # 25 tests (dataset/API tests skip if data not imported)
-cd frontend && npm run build              # type-check + production build
+cd backend && python -m pytest -q      # dataset / API tests skip if the data is not imported
+cd frontend && npm run build           # type-check + production build
 ```
 
-## Experiments
+## Hosted demo
 
-```bash
-cd backend
-python scripts/run_experiment.py bengalas                  # full mode, 11 fault scenarios, ~25 s
-python scripts/run_experiment.py malwathu
-python scripts/run_experiment.py bengalas --mode sample    # seeded 10k-row block (demo only)
-python scripts/seed_sweep.py bengalas --seeds 5            # repeat over fault-placement seeds
-python scripts/results_tables.py <run_id> --sweep bengalas # Markdown tables for docs
-```
+A read-only demo of an **earlier** version runs at https://floodguard-ai-chi.vercel.app. To publish this version:
+`python deploy/build_vercel.py && cd deploy/build && vercel deploy --prod` (needs the Vercel CLI).
 
-Outputs go to `results/runs/<run_id>/`:
+## Documentation
 
-* `results.json`: all metrics plus metadata (seed, dataset checksums, config, calibration, rule base, model version);
-* `summary.csv`;
-* `corrupted/` (model inputs);
-* `ground_truth/` (injection masks, evaluation only).
-
-## Layout
-
-```
-backend/floodguard/
-  datasets/        registry (verified metadata), loaders (download, checksum, schema, quality)
-  calibration.py   train-split-only parameters (thresholds, MF anchors, FOU, reliability limits)
-  reliability.py   per-sensor reliability + flags + unresolved conflict
-  fusion.py        reliability-weighted point estimates and interval inputs
-  fuzzy/           mf.py (IT2 trapezoids, exact interval firing), km.py (Karnik–Mendel), fis.py (rules, T1/IT2)
-  uncertainty.py   Q, D, F → U, bands, status
-  systems.py       threshold / Type-1 / IT2 / proposed; proxy labels
-  faults.py        fault injection on copies (11 scenarios)
-  metrics.py, experiment.py, api.py
-backend/scripts/   import_dataset, run_experiment, seed_sweep, results_tables
-backend/tests/     25 pytest tests
-frontend/          React + TypeScript (Vite): Dashboard, Dataset Explorer, IT2 Model, Experiments
-docs/              audit, dataset guide, protocol + results, model, demo guide, research gap, output track, viva Q&A
-```
-
-## Headline results (measured; Bengalas, 5-seed mean alert F1; full tables in `docs/EXPERIMENT_PROTOCOL.md`)
-
-| Scenario | Threshold | Type-1 FIS | IT2FIS | Proposed |
-|---|---|---|---|---|
-| clean | 0.862 | 0.883 | **0.895** | 0.888 |
-| spikes | 0.748 | 0.760 | 0.768 | **0.835** |
-| missing 30% | 0.836 | 0.839 | **0.845** | 0.825 |
-| heavy noise | **0.721** | 0.642 | 0.645 | 0.636 |
-| combined | 0.662 | 0.652 | 0.654 | **0.667** (within seed sd) |
-
-The proposed system helps clearly only under spike faults, and it makes degraded data visible: U is 2.4–6.1× higher on faulted steps, and it never reports "Confident" with a missing level. It is not better under noise, missing data, stuck readings or reduced reliability, and shows no benefit on the daily Malwathu data. See the limitations in `docs/EXPERIMENT_PROTOCOL.md` §4.
+`DATASET_DOCUMENTATION.md` · `REFERENCES.md` (Crossref-verified) · `docs/CHANGES.md` (what changed and why, incl. disclosed design changes) · `docs/VIVA_QA.md` · `docs/DEMO_SEQUENCE.md` · `docs/MATHEMATICAL_MODEL.md` · `docs/EXPERIMENT_PROTOCOL.md`.
+`docs/FloodGuard_Project_Guide.pdf` describes an earlier version and is kept for history only.

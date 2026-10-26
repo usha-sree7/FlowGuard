@@ -36,8 +36,8 @@
 
 * alert lead time;
 * event-level (not step-level) metrics;
-* validation-block design protocol;
-* ANFIS baseline;
+* validation-block design protocol (done in v0.5: last 20 % of train);
+* ANFIS baseline (dropped by design in v0.5, see docs/CHANGES.md);
 * additional catchments.
 
 **Candidate venues (to check scope, indexing and fees; not verified):**

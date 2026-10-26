@@ -30,9 +30,9 @@ Method: both repositories were cloned (`git clone --depth 1`). The data files we
 | Flood labels | **No observed flood labels.** The authors' `code/uncertainty-analysis/main.py` defines `threshold_flood_ds = mean + 2·std` of `nivel_conselheiro`, computed on the **full** dataset (≈1.43 m). |
 | Authors' split | `HOLDOUT_SLICE = 0.9` (chronological: first 90% nested CV, last 10% holdout); peak window `2023-10-27 08:00` – `2023-11-04 23:59`. |
 
-**Fit for rainfall + water-level fusion: good.** There is one level sensor, one rain gauge, and an independent areal rainfall source (radar), all at 30 min. True soil-moisture or flow data are **not** present, so FloodGuard does not use those variables.
+**Fit for rainfall + water-level fusion: good.** There is one level sensor, one rain gauge, and an independent areal rainfall source (radar), all at 30 min. True soil-moisture or flow data are **not** present, so HydroSentinel AI does not use those variables.
 
-**Proxy-label feasibility.** A future level exceeding the authors' statistical threshold can be computed without leakage. FloodGuard recomputes μ and σ on the **train split only**: Warning = 1.427 m (train) vs 1.43 m (authors, full data). The proxy is *exceedance of a statistical level*, not an observed flood.
+**Proxy-label feasibility.** A future level exceeding the authors' statistical threshold can be computed without leakage. HydroSentinel AI recomputes μ and σ on the **train split only**: Warning = 1.427 m (train) vs 1.43 m (authors, full data). The proxy is *exceedance of a statistical level*, not an observed flood.
 
 ## 2. Secondary: Malwathu Oya (Sri Lanka)
 
@@ -47,7 +47,7 @@ Method: both repositories were cloned (`git clone --depth 1`). The data files we
 | Level scaling | `Kappachichiya-1` is exactly **100×** `Kappachichiya` from the previous row (median ratio 100.0). The loader uses the metre-scaled target column. |
 | Units issue | The paper says rain is in cm, but maxima reach 417.97 per day, which suggests mm. **UNVERIFIED.** Values are kept as-is; the fuzzy partitions are data-quantile based, so the unit does not change the model. |
 | Duplicates | 117 identical raw rows (dry days). These are not duplicate timestamps and were not removed. |
-| Flood labels | None. FloodGuard uses the same proxy rule (train μ + kσ). |
+| Flood labels | None. HydroSentinel AI uses the same proxy rule (train μ + kσ). |
 
 **Fit:** usable as a **second real dataset for a generalisation check** (multi-gauge rain plus a level series), at a **daily** resolution that cannot capture flash-flood dynamics. It also serves as a method reference: the paper is a soft-computing (ANFIS ensemble) study.
 

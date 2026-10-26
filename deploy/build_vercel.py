@@ -1,4 +1,4 @@
-"""Assemble a read-only Vercel deployment of FloodGuard AI in deploy/build/.
+"""Assemble a read-only Vercel deployment of HydroSentinel AI in deploy/build/.
 
 Usage (from the repo root, after importing the datasets and building the frontend):
     python deploy/build_vercel.py
@@ -31,7 +31,7 @@ def main() -> None:
     if link.exists():  # keep the project link across rebuilds
         saved_link = Path(shutil.copytree(link, BUILD.parent / ".vercel-link", dirs_exist_ok=True))
     shutil.rmtree(BUILD, ignore_errors=True)
-    BUILD.mkdir(parents=True)
+    BUILD.mkdir(parents=True, exist_ok=True)  # Windows can leave the emptied folder behind briefly
 
     shutil.copytree(TEMPLATE, BUILD, dirs_exist_ok=True)
     shutil.copytree(ROOT / "backend" / "floodguard", BUILD / "floodguard",
@@ -43,7 +43,7 @@ def main() -> None:
         for name in ("results.json", "summary.csv"):
             if (run / name).exists():
                 shutil.copy2(run / name, out / name)
-    for f in (ROOT / "results").glob("model_comparison_*.*"):
+    for f in (ROOT / "results").glob("comparison_*.json"):
         shutil.copy2(f, BUILD / "bundle" / "results" / f.name)
     shutil.copytree(dist, BUILD / "public")
 

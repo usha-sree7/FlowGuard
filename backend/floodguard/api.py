@@ -1,4 +1,4 @@
-"""FastAPI backend: dataset explorer/import, model inspection, replay dashboard, experiments.
+"""HydroSentinel AI FastAPI backend: datasets, interactive assessment, historical replay, model comparison.
 
 Run:  uvicorn floodguard.api:app --port 8000   (from backend/)
 The built frontend (frontend/dist) is served at / when present.
@@ -21,12 +21,15 @@ from . import MODEL_VERSION, config
 from .calibration import split
 from .datasets import DATASETS, NOT_INTEGRATED, DatasetError, import_dataset, is_loaded, load_processed, load_quality
 from .datasets.loaders import manual_instructions
-from .experiment import list_runs, load_run, make_config, run_experiment
+from .experiment import _clean_json, list_runs, load_run, make_config, run_experiment
 from .faults import SCENARIO_DOC, SCENARIOS, inject
 from .fuzzy import INPUTS, OUTPUT_TERMS, TERMS
-from .systems import Pipeline, proxy_labels
+from .systems import Pipeline, future_level, proxy_labels
+from . import alerts, demo
+from .references import DATA_SOURCES_CHECKED, REFERENCES
+from .suite import MODEL_NAMES, MODES, RISK_MODELS, ModelSuite, horizons
 
-app = FastAPI(title="FloodGuard AI", version=MODEL_VERSION)
+app = FastAPI(title="HydroSentinel AI", version=MODEL_VERSION)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -90,7 +93,8 @@ def start_import(ds_id: str):
         try:
             rep = import_dataset(ds_id, progress=lambda m: _set_job(key, message=m))
             _pipeline.cache_clear()
-            _replay.cache_clear()
+            _suite.cache_clear()
+            _suite_replay.cache_clear()
             _set_job(key, state="done", message=f"loaded and validated {rep['rows']} rows")
         except DatasetError as e:
             _set_job(key, state="failed", message=str(e).splitlines()[0], manual=manual_instructions(spec))
@@ -121,7 +125,42 @@ def series(ds_id: str, max_points: int = 1500):
     n_train = int(len(df) * config.TRAIN_FRACTION)
     return {"step": step, "n": len(df), "train_end_index": n_train,
             "index": d.index.tolist(), "timestamp": d["timestamp"].tolist(), "level": _num(d["level"]),
-            "rain": {c[6:]: _num(d[c]) for c in rain_cols}}
+            # rise and rain: maximum within each plotted bucket, so short peaks survive the down-sampling
+            "rise": _num(df["rise_rate"].rolling(step, min_periods=1).max().iloc[::step]),
+            "rain": {c[6:]: _num(df[c].rolling(step, min_periods=1).max().iloc[::step]) for c in rain_cols}}
+
+
+@app.get("/api/datasets/{ds_id}/preview")
+def preview(ds_id: str, rows: int = 12):
+    """First rows of the processed file + per-column summary (computed from the file on disk)."""
+    spec = _spec(ds_id)
+    if not is_loaded(ds_id):
+        raise HTTPException(409, "dataset not imported")
+    df = load_processed(ds_id)
+    cfg = make_config(ds_id)
+    train, test = split(df, cfg.train_fraction)
+    n_fit = int(0.8 * len(train))
+    cols = [c for c in df.columns if c != "step_ok"]
+    head = df[cols].head(max(1, min(rows, 50)))
+    summary = {}
+    for c in cols:
+        if c == "timestamp":
+            continue
+        x = pd.to_numeric(df[c], errors="coerce")
+        summary[c] = {"missing": int(x.isna().sum()), "min": float(x.min()), "max": float(x.max()),
+                      "mean": float(x.mean()), "zeros_pct": round(float((x == 0).mean() * 100), 2)}
+
+    def ts(d, i):
+        return d["timestamp"].iloc[i] or f"index {d.index[i]}"
+
+    return {"columns": cols, "rows": json.loads(head.to_json(orient="records")), "summary": summary,
+            "n": len(df), "step_hours": spec.step_hours, "rain_window_hours": cfg.rain_window_steps * cfg.step_hours,
+            "split": {"fit": {"rows": n_fit, "first": ts(train, 0), "last": ts(train, n_fit - 1)},
+                      "validation": {"rows": len(train) - n_fit, "first": ts(train, n_fit),
+                                     "last": ts(train, len(train) - 1)},
+                      "test": {"rows": len(test), "first": test["timestamp"].iloc[0] or f"index {len(train)}",
+                               "last": test["timestamp"].iloc[-1] or f"index {len(df) - 1}"}},
+            "horizons": horizons(spec.step_hours)}
 
 
 # --------------------------------------------------------------------------- model
@@ -129,64 +168,77 @@ def series(ds_id: str, max_points: int = 1500):
 @lru_cache(maxsize=4)
 def _pipeline(ds_id: str):
     if not is_loaded(ds_id):
-        raise HTTPException(409, f"dataset '{ds_id}' not imported yet - use the Dataset Explorer")
+        raise HTTPException(409, f"dataset '{ds_id}' not imported yet")
     df = load_processed(ds_id)
     cfg = make_config(ds_id)
     train, test = split(df, cfg.train_fraction)
     return Pipeline.fit(train, cfg), test
 
 
-@app.get("/api/model/{ds_id}")
-def model(ds_id: str):
-    _spec(ds_id)
-    pipe, _ = _pipeline(ds_id)
-    desc = pipe.describe()
+def _saved(ds_id: str) -> dict:
+    f = config.RESULTS_DIR / f"comparison_{ds_id}.json"
+    return json.loads(f.read_text()).get("fitted", {}) if f.exists() else {}
+
+
+@lru_cache(maxsize=2)
+def _suite(ds_id: str) -> ModelSuite:
+    """Fitted model suite. The validation searches stored with the comparison run (PSO genes, selected SOM grid and
+    ANFIS ridge) are reused, so the served models are the evaluated ones; all fitting is repeated on train only."""
+    if not is_loaded(ds_id):
+        raise HTTPException(409, f"dataset '{ds_id}' not imported yet")
+    df = load_processed(ds_id)
+    cfg = make_config(ds_id)
+    train, _ = split(df, cfg.train_fraction)
+    return ModelSuite.fit(train, cfg, saved=_saved(ds_id))
+
+
+def _curves(fis, cal) -> dict:
     curves = {}
     for name in INPUTS:
-        lo, hi = pipe.cal.bounds[name]
-        a = pipe.cal.anchors[name]
-        span = a[2] - a[0]
-        x0 = max(lo, a[0] - 0.6 * span)
-        x1 = min(hi, a[2] + 0.6 * span)
-        xs = np.linspace(x0, x1, 240)
+        lo, hi = cal.bounds[name]
+        a = cal.anchors[name]
+        span = a[-1] - a[0]
+        xs = np.linspace(max(lo, a[0] - 0.6 * span), min(hi, a[-1] + 0.6 * span), 240)
         curves[name] = {"x": _num(xs), "terms": [
             {"term": TERMS[name][i], "lower": _num(m.lower(xs)), "upper": _num(m.upper(xs)),
-             "type1": _num(m.embedded(xs))} for i, m in enumerate(pipe.fis.mfs[name])]}
-    return {**desc, "curves": curves, "output_terms": OUTPUT_TERMS}
+             "type1": _num(m.embedded(xs))} for i, m in enumerate(fis.mfs[name])]}
+    return curves
 
 
-class InferRequest(BaseModel):
-    level: list[float]  # [lo, hi]; lo == hi for a crisp reading
-    rise: list[float]
-    rain: list[float]
-
-
-@app.post("/api/infer/{ds_id}")
-def infer(ds_id: str, req: InferRequest):
+@app.get("/api/model/{ds_id}")
+def model(ds_id: str, horizon: int | None = None):
+    """IT2FIS description and membership curves; with `horizon`, also the PSO-tuned curves for that horizon."""
     _spec(ds_id)
     pipe, _ = _pipeline(ds_id)
-    iv = {k: (np.array([min(v)]), np.array([max(v)])) for k, v in req.model_dump().items()}
-    it2 = pipe.fis.infer_it2(iv)
-    mid = {k: np.array([(v[0][0] + v[1][0]) / 2]) for k, v in iv.items()}
-    t1 = pipe.fis.infer_t1(mid)
-    from .fuzzy import rule_table
-    rules = rule_table()
-    top = np.argsort(-it2["f_hi"][0])[:6]
-    return {"it2": {"yl": float(it2["yl"][0]), "yr": float(it2["yr"][0]), "y": float(it2["y"][0])},
-            "t1": {"y": float(t1["y"][0])},
-            "class_it2": config.RISK_CLASSES[int(np.digitize(it2["y"][0], config.RISK_EDGES))],
-            "top_rules": [{**rules[i], "firing": [round(float(it2["f_lo"][0][i]), 4),
-                                                   round(float(it2["f_hi"][0][i]), 4)]} for i in top]}
+    out = {**pipe.describe(), "curves": _curves(pipe.fis, pipe.cal), "output_terms": OUTPUT_TERMS}
+    if horizon is not None:
+        suite = _suite(ds_id)
+        if horizon not in suite.horizons:
+            raise HTTPException(400, f"unsupported horizon {horizon}; supported: {list(suite.horizons)}")
+        out["tuned_curves"] = _curves(suite.pso[horizon].fis, suite.pso[horizon].cal)
+    return out
 
 
-# --------------------------------------------------------------------------- replay dashboard
+# --------------------------------------------------------------------------- historical replay
 
 @lru_cache(maxsize=24)
-def _replay(ds_id: str, scenario: str, seed: int):
-    pipe, test = _pipeline(ds_id)
-    corrupted, gt = inject(test, scenario, pipe.cal, seed)
-    run = pipe.run_all(corrupted)
-    return pipe, test, corrupted, gt, run, proxy_labels(test, pipe.cal)
+def _suite_replay(ds_id: str, scenario: str, seed: int):
+    suite = _suite(ds_id)
+    _, test = _pipeline(ds_id)
+    corrupted, gt = inject(test, scenario, suite.pipe.cal, seed)
+    return test, corrupted, gt, suite.run_shared(corrupted)
+
+
+def _check(suite, horizon, mode, model):
+    h = min(suite.horizons) if horizon is None else horizon
+    errs = []
+    if h not in suite.horizons:
+        errs.append(f"unsupported horizon {h}; supported: {list(suite.horizons)}")
+    if mode not in MODES:
+        errs.append(f"unknown input mode {mode}")
+    if model not in RISK_MODELS:
+        errs.append(f"unknown model {model}")
+    return h, errs
 
 
 @app.get("/api/scenarios")
@@ -194,43 +246,138 @@ def scenarios():
     return {"scenarios": [{"id": s, "description": SCENARIO_DOC[s]} for s in SCENARIOS]}
 
 
+@app.get("/api/episodes/{ds_id}")
+def episodes(ds_id: str, limit: int = 40):
+    """High-water episodes in the held-out test period (runs of observed level >= the High threshold)."""
+    _spec(ds_id)
+    pipe, test = _pipeline(ds_id)
+    cls = np.digitize(test["level"].to_numpy(float), pipe.cal.thresholds)
+    hi = cls >= config.ALERT_CLASS
+    starts = np.flatnonzero(hi & ~np.r_[False, hi[:-1]])
+    out = []
+    for s0 in starts:
+        e = s0
+        while e + 1 < len(hi) and hi[e + 1]:
+            e += 1
+        seg = test["level"].iloc[s0:e + 1]
+        out.append({"start": int(s0), "end": int(e), "timestamp": test["timestamp"].iloc[s0] or f"day {s0}",
+                    "peak_level": float(seg.max()), "peak_class": config.RISK_CLASSES[int(cls[s0:e + 1].max())],
+                    "steps": int(e - s0 + 1)})
+    out.sort(key=lambda r: -r["peak_level"])
+    return {"episodes": out[:limit], "total": len(out)}
+
+
 @app.get("/api/replay/{ds_id}")
-def replay(ds_id: str, scenario: str = "clean", offset: int = 0, limit: int = 96, seed: int = config.DEFAULT_SEED):
+def replay(ds_id: str, scenario: str = "clean", offset: int = 0, limit: int = 96, seed: int = config.DEFAULT_SEED,
+           horizon: int | None = None, mode: str = "raw", model: str = "it2_fis", at: int | None = None):
+    """A window of the held-out test period with every model's alert level per step, the proxy label and the
+    explanation of every model's alert at step `at` (default: the last step of the window)."""
     _spec(ds_id)
     if scenario not in SCENARIOS:
         raise HTTPException(400, "unknown scenario")
-    pipe, test, corrupted, gt, run, labels = _replay(ds_id, scenario, seed)
+    suite = _suite(ds_id)
+    h, errs = _check(suite, horizon, mode, model)
+    if errs:
+        raise HTTPException(400, "; ".join(errs))
+    test, corrupted, gt, sh = _suite_replay(ds_id, scenario, seed)
+    pipe = suite.pipe
+    hz = suite.run_horizon(sh, h)
+    labels = proxy_labels(test, pipe.cal, h)
+    fut = future_level(test, h, pipe.cal.cfg.step_hours)
     n = len(test)
     offset = int(np.clip(offset, 0, max(n - 1, 0)))
     sl = slice(offset, min(n, offset + max(1, min(limit, 2000))))
-    p = run["outputs"]["proposed"]
+    i = sl.stop - 1 if at is None else int(np.clip(at, sl.start, sl.stop - 1))
+    p = sh["proposed"]
     f, rel = p["fused"], p["rel"]
     sensors = list(pipe.cal.cfg.rain_sensors)
     any_fault = np.zeros(n, bool)
     for m in gt.values():
         any_fault |= m
+    X = sh["X"][mode]
     return {
-        "n": n, "offset": offset, "scenario": scenario, "seed": seed,
+        "n": n, "offset": offset, "at": i, "scenario": scenario, "seed": seed, "horizon": h,
+        "horizon_label": suite.horizons[h], "horizons": {str(k): v for k, v in suite.horizons.items()},
+        "mode": mode, "model": model,
         "note": "Replay of the held-out historical test split (not a live feed). Labels are PROXY labels.",
         "thresholds": pipe.cal.thresholds, "risk_classes": config.RISK_CLASSES,
-        "timestamp": [t or f"day {offset + i}" for i, t in enumerate(test["timestamp"].iloc[sl])],
-        "level_input": _num(corrupted["level"].to_numpy()[sl]), "level_original": _num(test["level"].to_numpy()[sl]),
+        "timestamp": [t or f"day {offset + k}" for k, t in enumerate(test["timestamp"].iloc[sl])],
+        "level_original": _num(test["level"].to_numpy()[sl]), "level_sensor": _num(corrupted["level"].to_numpy()[sl]),
         "level_fused": _num(f["level_c"][sl]), "level_lo": _num(f["level"][0][sl]), "level_hi": _num(f["level"][1][sl]),
-        "rise_point": _num(f["rise_point"][sl]), "rain_point": _num(f["rain_point"][sl]),
-        "rain_lo": _num(f["rain"][0][sl]), "rain_hi": _num(f["rain"][1][sl]),
-        "rain_input": {s: _num(corrupted[f"rain__{s}"].to_numpy()[sl]) for s in sensors},
-        "r_level": _num(f["r_level"][sl]),
-        "r_rain": {s: _num(rel["rain"][s]["r"][sl]) for s in sensors},
+        "level_used": _num(X[sl, 0]), "rise_used": _num(X[sl, 1]), "rain_used": _num(X[sl, 2]),
+        "rain_sensor": {s: _num(corrupted[f"rain__{s}"].to_numpy()[sl]) for s in sensors},
+        "rain_original": {s: _num(test[f"rain__{s}"].to_numpy()[sl]) for s in sensors},
+        "r_level": _num(f["r_level"][sl]), "r_rain": {s: _num(rel["rain"][s]["r"][sl]) for s in sensors},
         "flags": {k: _num(rel["level"][k][sl]) for k in ("missing", "out_of_range", "spike", "stuck", "noisy")},
-        "conflict": _num(f["conflict"][sl]),
-        "risk_score": _num(p["score"][sl]), "risk_yl": _num(p["yl"][sl]), "risk_yr": _num(p["yr"][sl]),
-        "risk_class": _num(p["cls"][sl]),
-        "U": _num(p["U"][sl]), "U_band": p["U_band"][sl].tolist(), "status": p["status"][sl].tolist(),
-        "Q": _num(p["Q"][sl]), "D": _num(p["D"][sl]), "F": _num(p["F"][sl]),
-        "baselines": {k: _num(run["outputs"][k]["cls"][sl]) for k in ("threshold", "t1_fis", "it2_fis")},
-        "proxy_label": _num(labels[sl]), "injected_fault": _num(any_fault[sl]),
-        "event_index": _num(np.flatnonzero(labels >= 2)[::max(1, int((labels >= 2).sum()) // 40)]),
+        "status": p["status"][sl].tolist(), "U": _num(p["U"][sl]),
+        "models": {k: _num(hz["cls"][mode][k][sl]) for k in RISK_MODELS}, "model_names": MODEL_NAMES,
+        "proxy_label": _num(labels[sl]), "future_level": _num(fut[sl]), "injected_fault": _num(any_fault[sl]),
+        "explanations": {m: alerts.explain(suite, sh, hz, h, i, m, mode) for m in RISK_MODELS},
+        "outcome": {"timestamp": test["timestamp"].iloc[i] or f"day {i}", "future_level": _num(fut[i:i + 1])[0],
+                    "proxy_label": _num(labels[i:i + 1])[0],
+                    "proxy_class": None if np.isnan(labels[i]) else config.RISK_CLASSES[int(labels[i])]},
     }
+
+
+# --------------------------------------------------------------------------- interactive assessment
+
+class AssessRequest(BaseModel):
+    level: float
+    rise: float
+    rain: float
+    horizon: int | None = None
+    scenario: str = "normal"
+    mode: str = "raw"
+
+
+@app.get("/api/assess/{ds_id}/options")
+def assess_options(ds_id: str):
+    _spec(ds_id)
+    suite = _suite(ds_id)
+    cal = suite.pipe.cal
+    win = cal.cfg.rain_window_steps * cal.cfg.step_hours
+    return {"scenarios": demo.SENSOR_SCENARIOS, "models": {m: MODEL_NAMES[m] for m in RISK_MODELS},
+            "horizons": {str(k): v for k, v in suite.horizons.items()},
+            "unsupported_horizons": horizons(cal.cfg.step_hours)["unsupported"],
+            "default_horizon": min(suite.horizons), "anchors": cal.anchors, "thresholds": cal.thresholds,
+            "bounds": {"level": list(cal.cfg.level_bounds), "rise": list(cal.bounds["rise"]),
+                       "rain": [0.0, cal.bounds["rain"][1]]},
+            "rain_window_hours": win, "risk_classes": config.RISK_CLASSES,
+            "units": {"level": "m", "rise": "m/h",
+                      "rain": f"accumulated over the last {win:g} h (gauge units; unit not documented in the source)"}}
+
+
+@app.post("/api/assess/{ds_id}")
+def assess(ds_id: str, req: AssessRequest):
+    _spec(ds_id)
+    suite = _suite(ds_id)
+    h, errs = _check(suite, req.horizon, req.mode, "it2_fis")
+    errs = demo.validate(suite.pipe, req.level, req.rise, req.rain) + errs
+    if req.scenario not in demo.SENSOR_SCENARIOS:
+        errs.append(f"unknown sensor scenario {req.scenario}")
+    if errs:
+        raise HTTPException(422, "; ".join(errs))
+    hist, true_level = demo.build_history(suite.pipe, req.level, req.rise, req.rain, req.scenario)
+    sh = suite.run_shared(hist)
+    hz = suite.run_horizon(sh, h)
+    i = len(hist) - 1
+    p = sh["proposed"]
+    return {
+        "kind": "HYPOTHETICAL DEMONSTRATION: constructed input history, not an evaluated prediction",
+        "horizon": h, "horizon_label": suite.horizons[h], "scenario": req.scenario, "mode": req.mode,
+        "scenario_description": demo.SENSOR_SCENARIOS[req.scenario],
+        "explanations": {m: alerts.explain(suite, sh, hz, h, i, m, req.mode, demo=True) for m in RISK_MODELS},
+        "history": {"level_true": _num(true_level), "level_sensor": _num(hist["level"].to_numpy()),
+                    "level_fused": _num(p["fused"]["level_c"]),
+                    "rain_sensors": {s: _num(hist[f"rain__{s}"].to_numpy()) for s in suite.pipe.cal.cfg.rain_sensors}},
+    }
+
+
+# --------------------------------------------------------------------------- references
+
+@app.get("/api/references")
+def references():
+    return {"references": REFERENCES, "data_sources_checked": DATA_SOURCES_CHECKED}
 
 
 # --------------------------------------------------------------------------- experiments
@@ -282,49 +429,14 @@ def experiment(run_id: str):
 
 
 # --------------------------------------------------------------------------- model comparison
-MODEL_INFO = {
-    "threshold": ("Threshold alarm", "original", "Class of the current level vs. the station thresholds."),
-    "t1_fis": ("Type-1 FIS", "original", "Same 64 rules with Type-1 MFs, crisp inputs."),
-    "it2_fis": ("IT2FIS", "original", "Interval Type-2 FIS, Karnik-Mendel type reduction, crisp inputs."),
-    "proposed": ("Reliability fusion + IT2FIS", "original", "Per-sensor reliability, weighted fusion, IT2FIS."),
-    "anfis": ("ANFIS", "new", "First-order Sugeno neuro-fuzzy system, hybrid LSE + gradient learning."),
-    "fcm_tsk": ("FCM-TSK", "new", "Fuzzy C-means clusters, one zero-order TSK rule per cluster."),
-    "ga_it2": ("GA-tuned IT2FIS", "new", "IT2FIS anchors and FOU width tuned by a genetic algorithm."),
-    "pso_it2": ("PSO-tuned IT2FIS", "new", "IT2FIS anchors and FOU width tuned by particle swarm optimisation."),
-    "ann": ("ANN", "option_a", "Multilayer perceptron (16 tanh units, softmax) on level, rise and rain."),
-    "som_ann": ("SOM + ANN", "option_a", "4x4 self-organising map detects the flow regime; the ANN gets the regime as input."),
-    "ga_som_ann": ("GA + SOM + ANN", "option_a", "Genetic algorithm selects the input features from 14 candidates "
-                   "(lags, changes, rolling rain), then SOM + ANN."),
-}
-COMPARE_METRICS = ("f1", "precision", "recall", "fpr", "macro_f1_4class", "swe")
-
 
 @app.get("/api/comparison/{ds_id}")
 def comparison(ds_id: str):
     _spec(ds_id)
-    f = config.RESULTS_DIR / f"model_comparison_{ds_id}.csv"
+    f = config.RESULTS_DIR / f"comparison_{ds_id}.json"
     if not f.exists():
         raise HTTPException(404, f"no comparison yet: run scripts/compare_models.py {ds_id}")
-    df = pd.read_csv(f)
-    g = df.groupby(["system", "scenario"])[list(COMPARE_METRICS)]
-    mean, sd = g.mean(), g.std().fillna(0.0)
-    scen = [s for s in SCENARIOS if s in df["scenario"].unique()]
-    models = []
-    for sysname in df["system"].unique():
-        base, fused = sysname.removesuffix("+fusion"), sysname.endswith("+fusion")
-        name, family, desc = MODEL_INFO.get(base, (base, "new", ""))
-        models.append({
-            "id": sysname, "name": name + (" + fusion" if fused else ""),
-            "family": "fusion" if fused else family,
-            "description": desc + (" Run on the reliability-weighted fused inputs." if fused else ""),
-            "per_scenario": {s: {m: round(float(mean.loc[(sysname, s), m]), 4) for m in COMPARE_METRICS}
-                             | {f"{m}_sd": round(float(sd.loc[(sysname, s), m]), 4) for m in COMPARE_METRICS}
-                             for s in scen},
-        })
-    best = config.RESULTS_DIR / f"model_comparison_{ds_id}_best.json"
-    return {"dataset": ds_id, "seeds": int(df["seed"].nunique()), "scenarios": scen,
-            "metrics": list(COMPARE_METRICS), "models": models,
-            "best": json.loads(best.read_text()) if best.exists() else None}
+    return json.loads(f.read_text())
 
 
 _dist = config.ROOT / "frontend" / "dist"

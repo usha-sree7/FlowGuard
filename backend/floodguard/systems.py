@@ -3,7 +3,7 @@
   threshold    : class of the current level vs. the station thresholds (conventional gauge alarm)
   t1_fis       : Type-1 FIS, same rules/variables, embedded T1 MFs, crisp inputs
   it2_fis      : IT2FIS (KM type reduction) with crisp (singleton) inputs, no reliability assessment
-  proposed     : reliability assessment -> reliability-weighted fusion (interval inputs) -> IT2FIS
+  proposed     : (shown as "fusion_it2", Model G) reliability assessment -> reliability-weighted fusion (interval inputs) -> IT2FIS
                  + separate uncertainty index / status
 
 Systems 1-3 are reliability-unaware and use the conventional naive pre-processing: missing level is
@@ -60,7 +60,8 @@ class Pipeline:
     def run_threshold(self, df):
         x = self.naive_inputs(df)["level"]
         cls = np.digitize(x, self.cal.thresholds)
-        return {"cls": cls, "score": np.array([10.0, 37.5, 62.5, 90.0])[cls]}
+        from .patterns import CLASS_SCORE
+        return {"cls": cls, "score": CLASS_SCORE[cls]}
 
     def run_t1(self, df):
         y = self.fis.infer_t1(self.naive_inputs(df))["y"]
@@ -118,10 +119,12 @@ def future_level(df: pd.DataFrame, horizon_steps: int, step_hours: float) -> np.
     return lookup.reindex(target).to_numpy()
 
 
-def proxy_labels(df_original: pd.DataFrame, cal: Calibration) -> np.ndarray:
+def proxy_labels(df_original: pd.DataFrame, cal: Calibration, horizon_steps: int | None = None) -> np.ndarray:
     """PROXY label (not an observed flood record): class of the FUTURE observed level, from the ORIGINAL
-    (uncorrupted) data. Returns float array with NaN where the future observation is unavailable."""
-    fut = future_level(df_original, cal.cfg.horizon_steps, cal.cfg.step_hours)
+    (uncorrupted) data. horizon_steps = 0 gives the current-condition label. Returns float array with NaN where
+    the future observation is unavailable."""
+    h = cal.cfg.horizon_steps if horizon_steps is None else horizon_steps
+    fut = future_level(df_original, h, cal.cfg.step_hours)
     cls = np.digitize(fut, cal.thresholds).astype(float)
     cls[np.isnan(fut)] = np.nan
     return cls

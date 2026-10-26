@@ -1,145 +1,75 @@
-import { useEffect, useMemo, useState } from 'react'
-import { api, fmt } from '../api'
+import { useEffect, useState } from 'react'
+import { api, fmt, ALL_MODELS, MODEL_COLOR, MODELS, RISK, RISK_COLOR } from '../api'
+import { GroupedBars, LineChart } from '../charts'
+import { METRIC_HELP } from '../content'
+import { clean, defaultHorizon, separated, useComparison } from '../data'
 
-type Model = {
-  id: string; name: string; family: string; description: string
-  per_scenario: Record<string, Record<string, number>>
-}
-type Best = {
-  best_model: string; risk_classes: string[]; confusion_matrix_clean: number[][]
-  metrics: { clean: Record<string, number>; faulted: Record<string, number> }
-  sample_output: { time: string; level: number; rain: number; label: string; best: string; proposed: string }[]
-  training_info: Record<string, any>
-}
-type Data = { dataset: string; seeds: number; scenarios: string[]; metrics: string[]; models: Model[]; best: Best | null }
-
-const METRICS: Record<string, { label: string; lower: boolean }> = {
-  f1: { label: 'Alert F1 (≥ Warning)', lower: false },
-  precision: { label: 'Precision', lower: false },
-  recall: { label: 'Recall', lower: false },
-  fpr: { label: 'False-positive rate', lower: true },
-  macro_f1_4class: { label: '4-class macro F1', lower: false },
-  swe: { label: 'Severity-weighted error', lower: true },
-}
-const FAMILIES: [string, string][] = [['original', 'Original systems'], ['new', 'Neuro-fuzzy & evolutionary fuzzy'], ['option_a', 'Option A: GA + SOM + ANN'], ['fusion', 'New models + reliability fusion']]
-const FAMILY_SHORT: Record<string, string> = { original: 'Original', new: 'Fuzzy / evolutionary', option_a: 'Option A', fusion: '+ fusion' }
-const DEFAULT = ['proposed', 'it2_fis', 'pso_it2', 'anfis', 'ann', 'som_ann', 'ga_som_ann']
-
-type Row = { m: Model; clean: number; faulted: number; worst: number; sel: number }
-
-function summarise(m: Model, scenarios: string[], metric: string, scen: string): Row {
-  const lower = METRICS[metric].lower
-  const v = (s: string) => m.per_scenario[s][metric]
-  const faulted = scenarios.filter((s) => s !== 'clean').map(v)
-  return {
-    m, clean: v('clean'), sel: scen === 'faulted' ? faulted.reduce((a, b) => a + b, 0) / faulted.length : v(scen),
-    faulted: faulted.reduce((a, b) => a + b, 0) / faulted.length,
-    worst: lower ? Math.max(...faulted) : Math.min(...faulted),
-  }
-}
-
-function RankBars({ rows, metric, scenLabel }: { rows: Row[]; metric: string; scenLabel: string }) {
-  const lower = METRICS[metric].lower
-  const vals = rows.map((r) => r.sel)
-  const max = Math.max(...vals, 1e-9)
+function Confusion({ cm, title }: { cm: number[][]; title: string }) {
+  const max = Math.max(...cm.flat(), 1)
   return (
-    <figure className="chart" role="img" aria-label={`${METRICS[metric].label}, ${scenLabel}, by model`}>
-      <div className="hbars">
-        {rows.map((r, i) => (
-          <div key={r.m.id} className="hbar-row" title={`${r.m.name}: ${fmt(r.sel)} (${scenLabel})`}>
-            <span className="hbar-label">{r.m.name}</span>
-            <span className="hbar-track">
-              <span className={i === 0 ? 'hbar best' : 'hbar'} style={{ width: `${Math.max(0.5, (r.sel / max) * 100)}%` }} />
-            </span>
-            <span className="hbar-value">{fmt(r.sel)}</span>
-          </div>
-        ))}
-      </div>
-      <figcaption className="muted small">Sorted best first ({lower ? 'lower' : 'higher'} is better). Hover a bar for its value.</figcaption>
-    </figure>
+    <div>
+      <h4>{title}</h4>
+      <table className="cm">
+        <thead><tr><th title="true level (rows) vs predicted (columns)">t \ p</th>{RISK.map((r) => <th key={r}>{r.slice(0, 3)}</th>)}</tr></thead>
+        <tbody>{cm.map((row, i) => (
+          <tr key={i}><th>{RISK[i].slice(0, 3)}</th>{row.map((v, j) => (
+            <td key={j} title={`true ${RISK[i]}, predicted ${RISK[j]}: ${v}`}
+              style={{ background: v ? `color-mix(in srgb, ${i === j ? 'var(--accent)' : 'var(--risk4)'} ${Math.round(12 + 70 * Math.sqrt(v / max))}%, transparent)` : undefined, fontWeight: i === j ? 700 : 400 }}>{v}</td>
+          ))}</tr>
+        ))}</tbody>
+      </table>
+    </div>
   )
 }
 
-function Heatmap({ rows, scenarios, metric }: { rows: Row[]; scenarios: string[]; metric: string }) {
-  const lower = METRICS[metric].lower
-  const all = rows.flatMap((r) => scenarios.map((s) => r.m.per_scenario[s][metric]))
-  const lo = Math.min(...all), hi = Math.max(...all)
-  const best: Record<string, number> = Object.fromEntries(scenarios.map((s) => {
-    const col = rows.map((r) => r.m.per_scenario[s][metric])
-    return [s, lower ? Math.min(...col) : Math.max(...col)]
-  }))
-  // single-hue sequential: stronger = better
-  const shade = (v: number) => {
-    const t = hi > lo ? (v - lo) / (hi - lo) : 1
-    return Math.round(8 + 62 * (lower ? 1 - t : t))
-  }
-  return (
-    <table className="results heat">
-      <thead><tr><th>Model</th>{scenarios.map((s) => <th key={s}>{s}</th>)}</tr></thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.m.id}>
-            <td>{r.m.name}</td>
-            {scenarios.map((s) => {
-              const v = r.m.per_scenario[s][metric]
-              const p = shade(v)
-              return (
-                <td key={s} className={v === best[s] ? 'best' : ''} title={`${r.m.name} · ${s}: ${fmt(v)} ± ${fmt(r.m.per_scenario[s][`${metric}_sd`])}`}
-                  style={{ background: `color-mix(in srgb, var(--accent) ${p}%, var(--panel))`, color: p > 45 ? 'var(--on-accent)' : undefined }}>
-                  {fmt(v)}
-                </td>
-              )
-            })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
-const RISK_CLASS: Record<string, string> = { Normal: 'r0', Watch: 'r1', Warning: 'r2', Critical: 'r3' }
-
-function BestModel({ best, models }: { best: Best; models: Model[] }) {
-  const name = (id: string) => models.find((m) => m.id === id)?.name ?? id
-  const info = best.training_info
+function PsoPanel({ d, h, dataset }: { d: any; h: string; dataset: string }) {
+  const p = d.fitted.pso_it2[h]
+  const it2 = clean(d, h, 'raw', 'it2_fis'), pso = clean(d, h, 'raw', 'pso_it2')
+  const [m, setM] = useState<any>(null)
+  useEffect(() => { api(`/model/${dataset}?horizon=${h}`).then(setM).catch(() => setM(null)) }, [dataset, h])
+  const inputs = ['level', 'rise', 'rain']
   return (
     <div className="panel">
-      <div className="row-between">
-        <h3>Overall best model: {name(best.best_model)}</h3>
-        <span className="tag ok">Rank 1 of {models.length} by faulted-mean alert F1</span>
-      </div>
-      <p className="muted small" style={{ marginTop: 0 }}>{models.find((m) => m.id === best.best_model)?.description}
-        {info?.features && <> Input features: <b>{info.features.join(', ')}</b>.</>}</p>
-      <div className="grid3">
+      <h2>PSO-tuned vs untuned IT2FIS ({d.meta.horizons[h]})</h2>
+      <p className="note">Both use the same 80 rules and the same inference. PSO only moves the fuzzy-set crossover points and scales the footprint of uncertainty.
+        It maximises <b>{p.objective}</b> on the validation block (the last 20 % of the training period), never on the test period.</p>
+      <div className="grid2" style={{ marginTop: 10 }}>
         <div>
-          <h4>Metrics</h4>
           <table className="results">
-            <thead><tr><th className="name">Metric</th><th>Clean</th><th>Faulted mean</th></tr></thead>
-            <tbody>{Object.entries(METRICS).map(([k, v]) => (
-              <tr key={k}><td className="name">{v.label}</td><td>{fmt(best.metrics.clean[k])}</td><td>{fmt(best.metrics.faulted[k])}</td></tr>
-            ))}</tbody>
+            <thead><tr><th></th><th>Untuned IT2FIS</th><th>PSO-tuned</th><th>Change</th></tr></thead>
+            <tbody>
+              <tr><td>Validation objective (used for tuning)</td><td>{fmt(p.validation_fitness_untuned)}</td><td>{fmt(p.validation_fitness_tuned)}</td><td>{fmt(p.validation_fitness_tuned - p.validation_fitness_untuned)}</td></tr>
+              <tr><td>Test alert F1</td><td>{fmt(it2.f1)}</td><td>{fmt(pso.f1)}</td><td>{(pso.f1 >= it2.f1 ? '+' : '') + fmt(pso.f1 - it2.f1)}</td></tr>
+              <tr><td>Test precision / recall</td><td>{fmt(it2.precision)} / {fmt(it2.recall)}</td><td>{fmt(pso.precision)} / {fmt(pso.recall)}</td><td></td></tr>
+              <tr><td>Test macro F1 (5 levels)</td><td>{fmt(it2.macro_f1)}</td><td>{fmt(pso.macro_f1)}</td><td>{fmt(pso.macro_f1 - it2.macro_f1)}</td></tr>
+              <tr><td>Missed alerts / false alarms</td><td>{it2.missed_alerts} / {it2.false_alarms}</td><td>{pso.missed_alerts} / {pso.false_alarms}</td><td></td></tr>
+            </tbody>
           </table>
+          <p className="small">{separated(it2, pso)
+            ? 'The 95 % intervals of test F1 do not overlap: the difference is supported by the data.'
+            : `The 95 % intervals of test F1 overlap ([${fmt(it2.f1_ci95[0])}, ${fmt(it2.f1_ci95[1])}] vs [${fmt(pso.f1_ci95[0])}, ${fmt(pso.f1_ci95[1])}]): the tuning gain is not statistically established.`}</p>
+          <h4>Swarm convergence (best validation objective per iteration)</h4>
+          <LineChart height={150} series={[{ values: p.best_fitness_per_iteration, color: MODEL_COLOR.pso_it2, label: `global best (${p.population} particles × ${p.iterations} iterations)` }]} />
         </div>
         <div>
-          <h4>Confusion matrix (clean test)</h4>
-          <table className="results cm">
-            <thead><tr><th className="name">Label ↓ / Pred →</th>{best.risk_classes.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-            <tbody>{best.confusion_matrix_clean.map((row, i) => (
-              <tr key={i}><td className="name">{best.risk_classes[i]}</td>
-                {row.map((v, j) => <td key={j} className={i === j ? 'diag' : ''}>{v}</td>)}</tr>
-            ))}</tbody>
-          </table>
-          <p className="muted small">Diagonal = correct. Labels are proxies (future observed level class).</p>
-        </div>
-        <div>
-          <h4>Output around the largest flood peak</h4>
+          <h4>Crossover points moved by PSO</h4>
           <table className="results">
-            <thead><tr><th className="name">Time</th><th>Level</th><th>Label</th><th>Best</th><th>Proposed</th></tr></thead>
-            <tbody>{best.sample_output.map((r, i) => (
-              <tr key={i}><td className="name small">{r.time}</td><td>{fmt(r.level, 2)}</td>
-                {[r.label, r.best, r.proposed].map((c, j) => <td key={j}><span className={`pill ${RISK_CLASS[c] ?? ''}`}>{c || '—'}</span></td>)}</tr>
-            ))}</tbody>
+            <thead><tr><th>Input</th><th>Original</th><th>Tuned</th></tr></thead>
+            <tbody>{inputs.map((n) => p.original_anchors[n].map((o: number, k: number) => (
+              <tr key={n + k}><td>{n} #{k + 1}</td><td>{fmt(o, 3)}</td><td>{fmt(p.tuned_anchors[n][k], 3)}</td></tr>
+            )))}
+              <tr><td>FOU scale</td><td>1.000</td><td>{fmt(p.fou_scale, 3)}</td></tr>
+            </tbody>
           </table>
+          {m?.tuned_curves && (
+            <>
+              <h4>Level membership functions (Type-1 midline): untuned solid, PSO dashed</h4>
+              <LineChart height={160} xLabels={[fmt(m.curves.level.x[0], 2) + ' m', fmt(m.curves.level.x[m.curves.level.x.length - 1], 2) + ' m']}
+                series={[...m.curves.level.terms.map((t: any, i: number) => ({ values: t.type1, color: RISK_COLOR[i], label: t.term, width: 1.6 })),
+                  ...m.tuned_curves.level.terms.map((t: any, i: number) => ({ values: t.type1, color: RISK_COLOR[i], label: `${t.term} (PSO)`, dash: true, width: 1.3 }))]} />
+              <p className="muted small">Both curves are drawn on the untuned x-range, so the shift of each crossover is visible directly.</p>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -147,124 +77,94 @@ function BestModel({ best, models }: { best: Best; models: Model[] }) {
 }
 
 export default function Compare({ dataset }: { dataset: string }) {
-  const [data, setData] = useState<Data | null>(null)
-  const [err, setErr] = useState('')
-  const [picked, setPicked] = useState<string[]>(DEFAULT)
-  const [metric, setMetric] = useState('f1')
-  const [scen, setScen] = useState('faulted')
-
-  useEffect(() => {
-    setData(null); setErr('')
-    api(`/comparison/${dataset}`).then(setData).catch((e) => setErr(e.message))
-  }, [dataset])
-
-  const rows = useMemo(() => {
-    if (!data) return []
-    const lower = METRICS[metric].lower
-    return data.models.filter((m) => picked.includes(m.id))
-      .map((m) => summarise(m, data.scenarios, metric, scen))
-      .sort((a, b) => (lower ? a.sel - b.sel : b.sel - a.sel))
-  }, [data, picked, metric, scen])
-
-  if (err) return <div className="error">{err}</div>
-  if (!data) return <div className="panel">Loading comparison…</div>
-
-  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
-  const scenLabel = scen === 'faulted' ? 'mean of faulted scenarios' : scen
-  const winner = rows[0]
+  const { d, err } = useComparison(dataset)
+  const [h, setH] = useState('')
+  const [mode, setMode] = useState('raw')
+  useEffect(() => { if (d) setH(defaultHorizon(d)) }, [d])
+  if (err) return <div className="panel error">No stored evaluation: {err}</div>
+  if (!d || !h) return <div className="panel">Loading evaluation results…</div>
+  const meta = d.meta
+  const rows = ALL_MODELS.map((m) => ({ m, c: clean(d, h, mode, m) }))
+  const best = Math.max(...MODELS.map((m) => clean(d, h, mode, m).f1))
+  const fit = d.fitted.fit_seconds
+  const ms = d.ms_per_obs_clean
+  const lc = meta.label_counts_test[h]
+  const horizonsList = Object.keys(meta.horizons)
 
   return (
     <div className="stack">
       <div className="panel">
-        <div className="row-between">
-          <h3>Select models to compare</h3>
-          <div className="row">
-            <button onClick={() => setPicked(data.models.map((m) => m.id))}>All</button>
-            <button onClick={() => setPicked(data.models.filter((m) => m.family === 'original').map((m) => m.id))}>Original only</button>
-            <button onClick={() => setPicked(DEFAULT)}>Default</button>
-            <button onClick={() => setPicked([])}>None</button>
-          </div>
-        </div>
-        <div className="grid4">
-          {FAMILIES.map(([fam, label]) => (
-            <fieldset key={fam} className="model-group">
-              <legend>{label}</legend>
-              {data.models.filter((m) => m.family === fam).map((m) => (
-                <label key={m.id} className="check" title={m.description}>
-                  <input type="checkbox" checked={picked.includes(m.id)} onChange={() => toggle(m.id)} /> {m.name}
-                </label>
-              ))}
-            </fieldset>
-          ))}
+        <h2>Compare the four models</h2>
+        <p className="note">All results are computed on the held-out test period ({meta.test.first} → {meta.test.last}, {meta.test.rows.toLocaleString()} steps), which no model saw during fitting or tuning.
+          Test labels at {meta.horizons[h]}: {RISK.map((r) => `${r} ${lc[r]}`).join(' · ')} ({lc.unlabelled} steps without a future reading).</p>
+        <div className="controls" style={{ marginTop: 10 }}>
+          <label className="ctl">Forecast horizon
+            <div className="chips">{horizonsList.map((k) => <button key={k} className={`chip small ${h === k ? 'on' : ''}`} onClick={() => setH(k)}>{meta.horizons[k]}</button>)}</div>
+          </label>
+          <label className="ctl">Reliability layer
+            <div className="toggle">
+              <button className={mode === 'raw' ? 'on' : ''} onClick={() => setMode('raw')}>Off (raw)</button>
+              <button className={mode === 'fused' ? 'on' : ''} onClick={() => setMode('fused')}>On (fused)</button>
+            </div>
+          </label>
+          {meta.unsupported_horizons.length > 0 && <span className="small muted">{meta.unsupported_horizons.join(', ')}: not possible with daily data.</span>}
         </div>
       </div>
 
-      <div className="panel toolbar">
-        <label>Metric
-          <select value={metric} onChange={(e) => setMetric(e.target.value)}>
-            {Object.entries(METRICS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-        </label>
-        <label>Scenario
-          <select value={scen} onChange={(e) => setScen(e.target.value)}>
-            <option value="faulted">All faulted (mean)</option>
-            {data.scenarios.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
-        <span className="sep" />
-        <span className="muted small">Mean over {data.seeds} fault-placement seeds · proxy labels · same test split for every model</span>
+      <div className="panel">
+        <h3>Evaluation metrics, clean sensors</h3>
+        <div className="table-scroll">
+          <table className="results">
+            <thead><tr><th>Model</th><th>Alert F1 [95 % CI]</th><th>Precision</th><th>Recall</th><th>FPR</th><th>Macro F1</th><th>κ</th><th>Sev. error</th><th>Missed</th><th>False alarms</th><th>Fit time</th><th>ms / step</th></tr></thead>
+            <tbody>{rows.map(({ m, c }) => (
+              <tr key={m} className={m === 'threshold' ? 'ref-row' : ''}>
+                <td><i className="dot" style={{ background: MODEL_COLOR[m] }} />{meta.models[m]}</td>
+                <td className={m !== 'threshold' && c.f1 === best ? 'best' : ''}>{fmt(c.f1)} <span className="ci">[{fmt(c.f1_ci95[0])}, {fmt(c.f1_ci95[1])}]</span></td>
+                <td>{fmt(c.precision)}</td><td>{fmt(c.recall)}</td><td>{fmt(c.fpr, 4)}</td><td>{fmt(c.macro_f1)}</td><td>{fmt(c.kappa)}</td>
+                <td>{fmt(c.swe)}</td><td>{c.missed_alerts}</td><td>{c.false_alarms}</td>
+                <td>{m === 'threshold' ? '—' : fit[m][h] == null ? '—' : `${fmt(fit[m][h], 1)} s`}</td>
+                <td>{m === 'threshold' ? '—' : fmt(ms[`${m}|${mode}`], 4)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+        <p className="muted small">Bold = highest F1 among the four techniques. The threshold row (italic) is a reference: the labels are built from it.
+          Fit time for IT2FIS is only the statistical calibration (it has no training); PSO includes the swarm search; SOM and ANFIS include their validation selection.
+          ms / step excludes the reliability layer ({fmt(ms.reliability_layer, 4)} ms / step when on).</p>
       </div>
 
-      {data.best && <BestModel best={data.best} models={data.models} />}
+      <div className="grid2">
+        <div className="panel">
+          <h3>Precision, recall and F1</h3>
+          <GroupedBars groups={MODELS.map((m) => { const c = clean(d, h, mode, m); return { label: meta.models[m], values: [c.precision, c.recall, c.f1], lo: [null, null, c.f1_ci95[0]], hi: [null, null, c.f1_ci95[1]] } })}
+            series={[{ label: 'precision', color: 'var(--muted-line)' }, { label: 'recall', color: 'var(--rain)' }, { label: 'F1 (whisker = 95 % CI)', color: 'var(--accent)' }]} />
+        </div>
+        <div className="panel">
+          <h3>Alert F1 by horizon</h3>
+          <GroupedBars groups={horizonsList.map((k) => ({ label: meta.horizons[k], values: MODELS.map((m) => clean(d, k, mode, m).f1) }))}
+            series={MODELS.map((m) => ({ label: meta.models[m], color: MODEL_COLOR[m] }))} />
+          <p className="muted small">Skill falls with lead time for every model: the further ahead, the less the current readings say about the future level.</p>
+        </div>
+      </div>
 
-      {rows.length === 0 ? <div className="panel">Select at least one model.</div> : (
-        <>
-          <div className="cards">
-            <div className="card">
-              <div className="muted small">Best of selected ({scenLabel})</div>
-              <div className="big">{winner.m.name}</div>
-              <div className="muted small">{METRICS[metric].label}: <b>{fmt(winner.sel)}</b></div>
-            </div>
-            <div className="card">
-              <div className="muted small">Models compared</div>
-              <div className="big">{rows.length}</div>
-              <div className="muted small">of {data.models.length} available</div>
-            </div>
-            <div className="card">
-              <div className="muted small">About the winner</div>
-              <p className="small" style={{ margin: '4px 0 0' }}>{winner.m.description}</p>
-            </div>
-          </div>
+      <div className="panel">
+        <h3>F1 for each alert level</h3>
+        <table className="results">
+          <thead><tr><th>Model</th>{RISK.map((r, i) => <th key={r} style={{ color: RISK_COLOR[i] }}>{r}</th>)}</tr></thead>
+          <tbody>{rows.map(({ m, c }) => (
+            <tr key={m} className={m === 'threshold' ? 'ref-row' : ''}><td>{meta.models[m]}</td>{c.per_class_f1.map((v: number | null, i: number) => <td key={i}>{fmt(v)}</td>)}</tr>
+          ))}</tbody>
+        </table>
+        <h3 style={{ marginTop: 14 }}>Confusion matrices (rows = actual level, columns = predicted)</h3>
+        <div className="grid4">{MODELS.map((m) => <Confusion key={m} cm={d.confusion_seed0[`${h}|clean|${mode}|${m}`]} title={meta.models[m]} />)}</div>
+      </div>
 
-          <div className="panel">
-            <h3>{METRICS[metric].label}: {scenLabel}</h3>
-            <RankBars rows={rows} metric={metric} scenLabel={scenLabel} />
-          </div>
+      <PsoPanel d={d} h={h} dataset={dataset} />
 
-          <div className="panel">
-            <h3>Leaderboard</h3>
-            <table className="results">
-              <thead><tr><th>#</th><th className="name">Model</th><th className="name">Family</th><th>Clean</th><th>Faulted mean</th><th>Worst case</th><th>{scen === 'faulted' ? 'Selected' : scen}</th></tr></thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={r.m.id}>
-                    <td>{i + 1}</td><td className="name" title={r.m.description}>{r.m.name}</td><td className="name">{FAMILY_SHORT[r.m.family] ?? r.m.family}</td>
-                    <td>{fmt(r.clean)}</td><td>{fmt(r.faulted)}</td><td>{fmt(r.worst)}</td>
-                    <td className={i === 0 ? 'best' : ''}>{fmt(r.sel)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="muted small">Metric: {METRICS[metric].label}. Worst case = weakest faulted scenario.</p>
-          </div>
-
-          <div className="panel">
-            <h3>Every scenario: {METRICS[metric].label}</h3>
-            <Heatmap rows={rows} scenarios={data.scenarios} metric={metric} />
-            <p className="muted small">Stronger blue = better. Bold = best in that scenario. Hover a cell for mean ± sd across seeds.</p>
-          </div>
-        </>
-      )}
+      <details className="panel">
+        <summary>What the metrics mean</summary>
+        <table className="kv"><tbody>{METRIC_HELP.map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>
+      </details>
     </div>
   )
 }

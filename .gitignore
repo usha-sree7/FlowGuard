@@ -12,3 +12,4 @@ frontend/dist/
 deploy/build/
 deploy/.vercel-link/
 .vercel
+results/*.log

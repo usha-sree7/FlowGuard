@@ -22,9 +22,13 @@ U_BANDS = [(25.0, "Low"), (50.0, "Moderate"), (75.0, "High"), (float("inf"), "Ve
 # U below this (and no essential input missing) -> "Confident".
 CONFIDENT_MAX_U = 25.0
 
-# Risk-score band edges on the 0-100 defuzzified output (fixed, not tuned on test data).
-RISK_CLASSES = ["Normal", "Watch", "Warning", "Critical"]
-RISK_EDGES = [25.0, 50.0, 75.0]
+# Five alert levels. Proxy labels use the train-split level thresholds mean + k*sd, k = LEVEL_K (calibration.py);
+# fuzzy / neuro-fuzzy scores use fixed band edges on the 0-100 output (not tuned on test data).
+RISK_CLASSES = ["Normal", "Low", "Moderate", "High", "Critical"]
+RISK_EDGES = [20.0, 40.0, 60.0, 80.0]
+N_CLASSES = len(RISK_CLASSES)
+# Positive class of the binary alert metrics: High or Critical (level above mean + 2 sd = the paper's flood threshold).
+ALERT_CLASS = 3
 
 # Chronological split: first TRAIN_FRACTION of rows used for every data-derived parameter.
 TRAIN_FRACTION = 0.70

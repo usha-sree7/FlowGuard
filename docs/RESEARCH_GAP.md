@@ -1,5 +1,7 @@
 # Research Gap (preliminary wording)
 
+> v0.5 update: the verified reference list (Crossref-checked DOIs) and the final gap statement are in `REFERENCES.md` and the dashboard tab *Research & Limitations*. Entries 6 and 7 below have now been verified (Information Sciences 132(1-4):195-220, doi:10.1016/S0020-0255(01)00069-X; IEEE TFS 10(2):117-127, doi:10.1109/91.995115).
+
 > Status: **preliminary**. No systematic prior-art review has been done yet. Nothing below claims global novelty. The wording reflects only the gap *relative to the works we actually checked*.
 
 ## Problem

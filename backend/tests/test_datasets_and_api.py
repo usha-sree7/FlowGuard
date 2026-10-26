@@ -42,13 +42,20 @@ def test_api_endpoints():
     assert c.get("/api/health").json()["ok"]
     ds = c.get("/api/datasets").json()
     assert {d["id"] for d in ds["datasets"]} == {"bengalas", "malwathu"}
-    m = c.get("/api/model/bengalas").json()
-    assert len(m["fis"]["rules"]) == 64 and "curves" in m
-    r = c.get("/api/replay/bengalas", params={"scenario": "spikes", "limit": 50}).json()
-    assert len(r["risk_score"]) == 50 and set(r["status"]) <= {"Confident", "Uncertain", "Insufficient data"}
-    inf = c.post("/api/infer/bengalas", json={"level": [1.5, 1.5], "rise": [0.3, 0.3], "rain": [5, 5]}).json()
-    assert inf["it2"]["yl"] <= inf["it2"]["y"] <= inf["it2"]["yr"]
+    m = c.get("/api/model/bengalas", params={"horizon": 2}).json()
+    assert len(m["fis"]["rules"]) == 80 and len(m["curves"]["level"]["terms"]) == 5 and "tuned_curves" in m
+    r = c.get("/api/replay/bengalas", params={"scenario": "spikes", "limit": 50, "mode": "fused"}).json()
+    assert len(r["level_used"]) == 50 and set(r["status"]) <= {"Confident", "Uncertain", "Insufficient data"}
+    assert set(r["models"]) == {"it2_fis", "pso_it2", "som", "anfis", "threshold"}
     assert c.get("/api/replay/nope").status_code == 404
+    r = c.get("/api/replay/bengalas", params={"limit": 30, "horizon": 6, "model": "anfis", "at": 10}).json()
+    assert r["horizon_label"] == "3 h" and r["at"] == 10 and r["explanations"]["anfis"]["reasons"]
+    assert c.get("/api/replay/bengalas", params={"horizon": 5}).status_code == 400
+    assert c.get("/api/episodes/bengalas").json()["total"] > 0
+    for path in ("/api/references", "/api/datasets/bengalas/preview", "/api/assess/bengalas/options"):
+        assert c.get(path).status_code == 200
+    refs = c.get("/api/references").json()["references"]
+    assert all(x["doi"] for x in refs)
 
 
 def test_failed_download_gives_manual_instructions_and_is_not_loaded(tmp_path, monkeypatch):
