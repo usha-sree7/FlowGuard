@@ -5,7 +5,13 @@ type Model = {
   id: string; name: string; family: string; description: string
   per_scenario: Record<string, Record<string, number>>
 }
-type Data = { dataset: string; seeds: number; scenarios: string[]; metrics: string[]; models: Model[] }
+type Best = {
+  best_model: string; risk_classes: string[]; confusion_matrix_clean: number[][]
+  metrics: { clean: Record<string, number>; faulted: Record<string, number> }
+  sample_output: { time: string; level: number; rain: number; label: string; best: string; proposed: string }[]
+  training_info: Record<string, any>
+}
+type Data = { dataset: string; seeds: number; scenarios: string[]; metrics: string[]; models: Model[]; best: Best | null }
 
 const METRICS: Record<string, { label: string; lower: boolean }> = {
   f1: { label: 'Alert F1 (≥ Warning)', lower: false },
@@ -15,8 +21,9 @@ const METRICS: Record<string, { label: string; lower: boolean }> = {
   macro_f1_4class: { label: '4-class macro F1', lower: false },
   swe: { label: 'Severity-weighted error', lower: true },
 }
-const FAMILIES: [string, string][] = [['original', 'Original systems'], ['new', 'New soft-computing models'], ['new+fusion', 'New models + reliability fusion']]
-const DEFAULT = ['proposed', 'it2_fis', 'pso_it2', 'pso_it2+fusion', 'ga_it2', 'anfis', 'fcm_tsk']
+const FAMILIES: [string, string][] = [['original', 'Original systems'], ['new', 'Neuro-fuzzy & evolutionary fuzzy'], ['option_a', 'Option A: GA + SOM + ANN'], ['fusion', 'New models + reliability fusion']]
+const FAMILY_SHORT: Record<string, string> = { original: 'Original', new: 'Fuzzy / evolutionary', option_a: 'Option A', fusion: '+ fusion' }
+const DEFAULT = ['proposed', 'it2_fis', 'pso_it2', 'anfis', 'ann', 'som_ann', 'ga_som_ann']
 
 type Row = { m: Model; clean: number; faulted: number; worst: number; sel: number }
 
@@ -90,6 +97,55 @@ function Heatmap({ rows, scenarios, metric }: { rows: Row[]; scenarios: string[]
   )
 }
 
+const RISK_CLASS: Record<string, string> = { Normal: 'r0', Watch: 'r1', Warning: 'r2', Critical: 'r3' }
+
+function BestModel({ best, models }: { best: Best; models: Model[] }) {
+  const name = (id: string) => models.find((m) => m.id === id)?.name ?? id
+  const info = best.training_info
+  return (
+    <div className="panel">
+      <div className="row-between">
+        <h3>Overall best model: {name(best.best_model)}</h3>
+        <span className="tag ok">Rank 1 of {models.length} by faulted-mean alert F1</span>
+      </div>
+      <p className="muted small" style={{ marginTop: 0 }}>{models.find((m) => m.id === best.best_model)?.description}
+        {info?.features && <> Input features: <b>{info.features.join(', ')}</b>.</>}</p>
+      <div className="grid3">
+        <div>
+          <h4>Metrics</h4>
+          <table className="results">
+            <thead><tr><th className="name">Metric</th><th>Clean</th><th>Faulted mean</th></tr></thead>
+            <tbody>{Object.entries(METRICS).map(([k, v]) => (
+              <tr key={k}><td className="name">{v.label}</td><td>{fmt(best.metrics.clean[k])}</td><td>{fmt(best.metrics.faulted[k])}</td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+        <div>
+          <h4>Confusion matrix (clean test)</h4>
+          <table className="results cm">
+            <thead><tr><th className="name">Label ↓ / Pred →</th>{best.risk_classes.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>{best.confusion_matrix_clean.map((row, i) => (
+              <tr key={i}><td className="name">{best.risk_classes[i]}</td>
+                {row.map((v, j) => <td key={j} className={i === j ? 'diag' : ''}>{v}</td>)}</tr>
+            ))}</tbody>
+          </table>
+          <p className="muted small">Diagonal = correct. Labels are proxies (future observed level class).</p>
+        </div>
+        <div>
+          <h4>Output around the largest flood peak</h4>
+          <table className="results">
+            <thead><tr><th className="name">Time</th><th>Level</th><th>Label</th><th>Best</th><th>Proposed</th></tr></thead>
+            <tbody>{best.sample_output.map((r, i) => (
+              <tr key={i}><td className="name small">{r.time}</td><td>{fmt(r.level, 2)}</td>
+                {[r.label, r.best, r.proposed].map((c, j) => <td key={j}><span className={`pill ${RISK_CLASS[c] ?? ''}`}>{c || '—'}</span></td>)}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Compare({ dataset }: { dataset: string }) {
   const [data, setData] = useState<Data | null>(null)
   const [err, setErr] = useState('')
@@ -129,7 +185,7 @@ export default function Compare({ dataset }: { dataset: string }) {
             <button onClick={() => setPicked([])}>None</button>
           </div>
         </div>
-        <div className="grid3">
+        <div className="grid4">
           {FAMILIES.map(([fam, label]) => (
             <fieldset key={fam} className="model-group">
               <legend>{label}</legend>
@@ -159,11 +215,13 @@ export default function Compare({ dataset }: { dataset: string }) {
         <span className="muted small">Mean over {data.seeds} fault-placement seeds · proxy labels · same test split for every model</span>
       </div>
 
+      {data.best && <BestModel best={data.best} models={data.models} />}
+
       {rows.length === 0 ? <div className="panel">Select at least one model.</div> : (
         <>
           <div className="cards">
             <div className="card">
-              <div className="muted small">Best model ({scenLabel})</div>
+              <div className="muted small">Best of selected ({scenLabel})</div>
               <div className="big">{winner.m.name}</div>
               <div className="muted small">{METRICS[metric].label}: <b>{fmt(winner.sel)}</b></div>
             </div>
@@ -190,7 +248,7 @@ export default function Compare({ dataset }: { dataset: string }) {
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={r.m.id}>
-                    <td>{i + 1}</td><td className="name" title={r.m.description}>{r.m.name}</td><td className="name">{r.m.family}</td>
+                    <td>{i + 1}</td><td className="name" title={r.m.description}>{r.m.name}</td><td className="name">{FAMILY_SHORT[r.m.family] ?? r.m.family}</td>
                     <td>{fmt(r.clean)}</td><td>{fmt(r.faulted)}</td><td>{fmt(r.worst)}</td>
                     <td className={i === 0 ? 'best' : ''}>{fmt(r.sel)}</td>
                   </tr>

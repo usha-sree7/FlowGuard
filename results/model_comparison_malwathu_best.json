@@ -1,0 +1,180 @@
+{
+ "dataset": "malwathu",
+ "best_model": "som_ann",
+ "ranking": [
+  "som_ann",
+  "som_ann+fusion",
+  "pso_it2",
+  "it2_fis",
+  "ga_it2",
+  "ann",
+  "t1_fis",
+  "threshold",
+  "proposed",
+  "pso_it2+fusion",
+  "ga_it2+fusion",
+  "ann+fusion",
+  "ga_som_ann",
+  "anfis",
+  "ga_som_ann+fusion",
+  "anfis+fusion",
+  "fcm_tsk+fusion",
+  "fcm_tsk"
+ ],
+ "metrics": {
+  "clean": {
+   "precision": 0.9090909090909091,
+   "recall": 0.9090909090909091,
+   "f1": 0.9090909090909091,
+   "fpr": 0.004402054292002935,
+   "macro_f1_4class": 0.6062428709076166,
+   "swe": 0.07557732680195942
+  },
+  "faulted": {
+   "precision": 0.839262454707035,
+   "recall": 0.8974747474747474,
+   "f1": 0.8658109190047181,
+   "fpr": 0.008730741012472487,
+   "macro_f1_4class": 0.577893043904813,
+   "swe": 0.08829017961278283
+  }
+ },
+ "confusion_matrix_clean": [
+  [
+   1293,
+   32,
+   0,
+   0
+  ],
+  [
+   5,
+   27,
+   5,
+   1
+  ],
+  [
+   0,
+   3,
+   4,
+   5
+  ],
+  [
+   0,
+   3,
+   18,
+   33
+  ]
+ ],
+ "risk_classes": [
+  "Normal",
+  "Watch",
+  "Warning",
+  "Critical"
+ ],
+ "sample_output": [
+  {
+   "time": "test row 556",
+   "level": 0.213,
+   "rain": 14.77,
+   "label": "Normal",
+   "best": "Normal",
+   "proposed": "Normal"
+  },
+  {
+   "time": "test row 557",
+   "level": 0.153,
+   "rain": 10.7,
+   "label": "Normal",
+   "best": "Normal",
+   "proposed": "Normal"
+  },
+  {
+   "time": "test row 558",
+   "level": 0.144,
+   "rain": 0.0,
+   "label": "Normal",
+   "best": "Normal",
+   "proposed": "Normal"
+  },
+  {
+   "time": "test row 559",
+   "level": 0.11,
+   "rain": 17.73,
+   "label": "Watch",
+   "best": "Normal",
+   "proposed": "Normal"
+  },
+  {
+   "time": "test row 560",
+   "level": 0.839,
+   "rain": 8.72,
+   "label": "Normal",
+   "best": "Watch",
+   "proposed": "Watch"
+  },
+  {
+   "time": "test row 561",
+   "level": 0.411,
+   "rain": 152.47,
+   "label": "Critical",
+   "best": "Warning",
+   "proposed": "Watch"
+  },
+  {
+   "time": "test row 562",
+   "level": 2.93,
+   "rain": 131.0,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "test row 563",
+   "level": 4.86,
+   "rain": 25.37,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "test row 564",
+   "level": 5.787,
+   "rain": 0.08,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "test row 565",
+   "level": 4.944,
+   "rain": 1.18,
+   "label": "Critical",
+   "best": "Warning",
+   "proposed": "Critical"
+  },
+  {
+   "time": "test row 566",
+   "level": 4.477,
+   "rain": 0.03,
+   "label": "Critical",
+   "best": "Warning",
+   "proposed": "Critical"
+  },
+  {
+   "time": "test row 567",
+   "level": 2.296,
+   "rain": 0.0,
+   "label": "Watch",
+   "best": "Warning",
+   "proposed": "Critical"
+  }
+ ],
+ "training_info": {
+  "features": [
+   "level",
+   "rise",
+   "rain"
+  ],
+  "validation_fitness": 0.917
+ }
+}

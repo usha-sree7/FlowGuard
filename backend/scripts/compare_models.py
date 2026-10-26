@@ -8,6 +8,7 @@ split, faults injected into a copy of the test split, proxy labels from the ORIG
 Writes results/MODEL_COMPARISON_<dataset>.md and results/model_comparison_<dataset>.csv.
 """
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,39 @@ from floodguard.faults import SCENARIOS, inject  # noqa: E402
 from floodguard.metrics import evaluate  # noqa: E402
 from floodguard.softcomputing import SoftComputingModels  # noqa: E402
 from floodguard.systems import SYSTEMS, Pipeline, proxy_labels  # noqa: E402
+
+
+RISK = ["Normal", "Watch", "Warning", "Critical"]
+METRIC_LABELS = {"precision": "Alert precision", "recall": "Alert recall", "f1": "Alert F1", "fpr": "False-positive rate",
+                 "macro_f1_4class": "4-class macro F1", "swe": "Severity-weighted error"}
+
+
+def _describe(name, info):
+    if "genes" in info:
+        return f"{name} {info['validation_fitness_original']:.3f} -> {info['validation_fitness_tuned']:.3f} (tuned)"
+    if "features" in info:
+        return f"{name} {info['validation_fitness']:.3f} using {', '.join(info['features'])}"
+    return f"{name} selected {info['selected']} {info['validation_fitness']}"
+
+
+def best_model_report(ds, best, rank, res, test, labels, clean_preds, faulted, info):
+    mean = res[res["system"] == best].groupby("scenario")[list(METRIC_LABELS)].mean()
+    metrics = {"clean": mean.loc["clean"].to_dict(), "faulted": mean.loc[faulted].mean().to_dict()}
+    cm = evaluate(labels, clean_preds[best])["ordinal"]["confusion_matrix"]
+    ts = test["timestamp"].fillna("").astype(str)
+    t = np.where(ts.str.len() > 0, ts, [f"test row {i}" for i in range(len(test))])
+    out = pd.DataFrame({"time": t, "level": test["level"].round(3), "rain": test.filter(like="rain__").mean(axis=1).round(2),
+                        "proxy_label": [RISK[int(v)] if v == v else "" for v in labels],
+                        best: [RISK[v] for v in clean_preds[best]],
+                        "proposed": [RISK[v] for v in clean_preds["proposed"]]})
+    out.to_csv(config.RESULTS_DIR / f"best_model_output_{ds}.csv", index=False)
+    peak = int(np.nanargmax(test["level"].to_numpy(float)))
+    win = out.iloc[max(0, peak - 8):peak + 4]
+    sample = [{"time": str(r.time), "level": float(r.level), "rain": float(r.rain), "label": r.proxy_label,
+               "best": r[best], "proposed": r.proposed} for _, r in win.iterrows()]
+    return {"dataset": ds, "best_model": best, "ranking": rank.index.tolist(), "metrics": metrics,
+            "confusion_matrix_clean": cm, "risk_classes": RISK, "sample_output": sample,
+            "training_info": info.get(best.removesuffix("+fusion"), {})}
 
 
 def main():
@@ -45,13 +79,15 @@ def main():
     for k, v in sc.info.items():
         print(f"  {k}: {v}")
 
-    rows = []
+    rows, clean_preds = [], {}
     for k in range(a.seeds):
         seed = config.DEFAULT_SEED + 1000 * k
         for i, scen in enumerate(SCENARIOS):
             corrupted, _ = inject(test, scen, pipe.cal, seed=seed + i)
             preds = {n: o["cls"] for n, o in pipe.run_all(corrupted)["outputs"].items()}
             preds.update(sc.predict_all(pipe, corrupted))
+            if k == 0 and scen == "clean":
+                clean_preds = preds
             for name, cls in preds.items():
                 ev = evaluate(labels, cls)
                 b, od = ev["binary_alert"], ev["ordinal"]
@@ -83,9 +119,7 @@ def main():
           "reliability-weighted fused inputs.", "",
           "Model selection on the validation block (last 20 % of train; fitness = alert F1 + 0.25 x 4-class "
           "macro F1): " + "; ".join(
-              f"{k} {v['validation_fitness_original']:.3f} -> {v['validation_fitness_tuned']:.3f} (GA/PSO tuning)"
-              if "genes" in v else f"{k} selected {v['selected']} {v['validation_fitness']}"
-              for k, v in sc.info.items()), "",
+              _describe(k, v) for k, v in sc.info.items()), "",
           "| Rank | System | Family | Clean F1 | Faulted mean F1 | Worst-case F1 | Mean SWE | 4-class macro F1 |",
           "|---|---|---|---|---|---|---|---|"]
     for i, (s, r) in enumerate(rank.iterrows(), 1):
@@ -97,9 +131,29 @@ def main():
         vals = f1.loc[s]
         md.append(f"| {s} | " + " | ".join(
             f"**{v:.3f}**" if np.isclose(v, f1[c].max()) else f"{v:.3f}" for c, v in vals.items()) + " |")
+    best = rank.index[0]
+    report = best_model_report(a.dataset, best, rank, res, test, labels, clean_preds, faulted, sc.info)
+    (out / f"model_comparison_{a.dataset}_best.json").write_text(json.dumps(report, indent=1))
+    md += ["", f"## Best model: {best}", "", "Mean over seeds; faulted = mean of the 10 faulted scenarios.", "",
+           "| Metric | Clean | Faulted mean |", "|---|---|---|"]
+    for m, label in METRIC_LABELS.items():
+        md.append(f"| {label} | {report['metrics']['clean'][m]:.4f} | {report['metrics']['faulted'][m]:.4f} |")
+    cm = report["confusion_matrix_clean"]
+    md += ["", "Confusion matrix on the clean test split (rows = proxy label, columns = prediction):", "",
+           "| | " + " | ".join(RISK) + " |", "|---|" + "---|" * 4]
+    md += [f"| {RISK[i]} | " + " | ".join(str(v) for v in row) + " |" for i, row in enumerate(cm)]
+    md += ["", f"Sample output around the largest test-period flood peak (full output in "
+           f"`results/best_model_output_{a.dataset}.csv`):", "",
+           "| Time | Level | Rain | Proxy label | " + best + " | proposed |", "|---|---|---|---|---|---|"]
+    md += [f"| {r['time']} | {r['level']} | {r['rain']} | {r['label']} | {r['best']} | {r['proposed']} |"
+           for r in report["sample_output"]]
     (out / f"MODEL_COMPARISON_{a.dataset}.md").write_text("\n".join(md) + "\n")
     print("\n" + rank.round(3).to_string())
-    print(f"\nwrote results/MODEL_COMPARISON_{a.dataset}.md")
+    print(f"\nBEST MODEL: {best}")
+    for m, label in METRIC_LABELS.items():
+        print(f"  {label:28s} clean {report['metrics']['clean'][m]:.4f}   faulted {report['metrics']['faulted'][m]:.4f}")
+    print(f"\nwrote results/MODEL_COMPARISON_{a.dataset}.md, model_comparison_{a.dataset}.csv, "
+          f"model_comparison_{a.dataset}_best.json, best_model_output_{a.dataset}.csv")
 
 
 if __name__ == "__main__":

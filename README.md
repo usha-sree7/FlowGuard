@@ -66,16 +66,18 @@ A full explanation of the project for reviews and interviews is in `docs/FloodGu
 
 Besides the four original systems, four more soft-computing models are compared (`backend/floodguard/softcomputing.py`):
 ANFIS, FCM-TSK (fuzzy C-means rules), and the IT2FIS tuned by a genetic algorithm (GA-IT2FIS) or by particle swarm
-optimisation (PSO-IT2FIS). Each also runs on the reliability-fused inputs (`+fusion`). Tuning and model selection
+optimisation (PSO-IT2FIS). Option A (`backend/floodguard/neural.py`) adds a GA + SOM + ANN hybrid, built in three
+stages so the effect of each part is measured: ANN, SOM + ANN, GA + SOM + ANN. Every model also runs on the reliability-fused inputs (`+fusion`), 18 in total. Tuning and model selection
 use only the last 20 % of the train split.
 
 ```bash
 cd backend
-python scripts/compare_models.py bengalas --seeds 3   # ~3 min; writes results/MODEL_COMPARISON_bengalas.md + CSV
+python scripts/compare_models.py bengalas --seeds 3   # ~6 min; writes results/MODEL_COMPARISON_bengalas.md,
+                                                      # model_comparison_bengalas{.csv,_best.json}, best_model_output_bengalas.csv
 python scripts/compare_models.py malwathu --seeds 3
 ```
 
-The **Model Comparison** tab shows the results. You can select any subset of the 12 models, pick a metric and a scenario, and see the best model, a ranked bar chart, a leaderboard and a scenario heatmap.
+The **Model Comparison** tab shows the overall best model (metrics, confusion matrix, output around the largest flood peak). You can also select any subset of the 18 models, pick a metric and a scenario, and see the best model, a ranked bar chart, a leaderboard and a scenario heatmap.
 
 ## Tests
 

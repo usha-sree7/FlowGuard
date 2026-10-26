@@ -1,0 +1,188 @@
+{
+ "dataset": "bengalas",
+ "best_model": "pso_it2",
+ "ranking": [
+  "pso_it2",
+  "ga_it2",
+  "pso_it2+fusion",
+  "it2_fis",
+  "ga_it2+fusion",
+  "threshold",
+  "t1_fis",
+  "proposed",
+  "anfis+fusion",
+  "anfis",
+  "som_ann+fusion",
+  "ann+fusion",
+  "som_ann",
+  "ann",
+  "ga_som_ann+fusion",
+  "ga_som_ann",
+  "fcm_tsk+fusion",
+  "fcm_tsk"
+ ],
+ "metrics": {
+  "clean": {
+   "precision": 0.9245283018867925,
+   "recall": 0.900459418070444,
+   "f1": 0.91233514352211,
+   "fpr": 0.002370253320823663,
+   "macro_f1_4class": 0.8773696300935039,
+   "swe": 0.03750478377344049
+  },
+  "faulted": {
+   "precision": 0.8011950765867774,
+   "recall": 0.8450740173557938,
+   "f1": 0.8188005414040702,
+   "fpr": 0.007588102645136865,
+   "macro_f1_4class": 0.7782748340922356,
+   "swe": 0.08387708891440235
+  }
+ },
+ "confusion_matrix_clean": [
+  [
+   18422,
+   91,
+   3,
+   0
+  ],
+  [
+   185,
+   1505,
+   43,
+   2
+  ],
+  [
+   7,
+   46,
+   253,
+   40
+  ],
+  [
+   6,
+   6,
+   25,
+   270
+  ]
+ ],
+ "risk_classes": [
+  "Normal",
+  "Watch",
+  "Warning",
+  "Critical"
+ ],
+ "sample_output": [
+  {
+   "time": "2022-12-07 20:00:00",
+   "level": 1.17,
+   "rain": 3.03,
+   "label": "Critical",
+   "best": "Normal",
+   "proposed": "Watch"
+  },
+  {
+   "time": "2022-12-07 20:30:00",
+   "level": 1.4,
+   "rain": 6.63,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-07 21:00:00",
+   "level": 1.88,
+   "rain": 2.12,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-07 21:30:00",
+   "level": 2.44,
+   "rain": 0.61,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-07 22:00:00",
+   "level": 2.6,
+   "rain": 2.48,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-07 22:30:00",
+   "level": 2.77,
+   "rain": 3.76,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-07 23:00:00",
+   "level": 2.84,
+   "rain": 1.19,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-07 23:30:00",
+   "level": 2.95,
+   "rain": 0.73,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-08 00:00:00",
+   "level": 2.96,
+   "rain": 0.0,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-08 00:30:00",
+   "level": 2.87,
+   "rain": 0.0,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-08 01:00:00",
+   "level": 2.76,
+   "rain": 0.0,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  },
+  {
+   "time": "2022-12-08 01:30:00",
+   "level": 2.64,
+   "rain": 0.0,
+   "label": "Critical",
+   "best": "Critical",
+   "proposed": "Critical"
+  }
+ ],
+ "training_info": {
+  "validation_fitness_original": 1.146239051340008,
+  "validation_fitness_tuned": 1.166237781130255,
+  "genes": [
+   0.006,
+   0.089,
+   0.151,
+   -0.067,
+   0.382,
+   1.0,
+   0.506,
+   0.22,
+   -0.596,
+   2.988
+  ]
+ }
+}

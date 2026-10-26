@@ -135,3 +135,11 @@ footer { color: var(--muted); font-size: 0.8rem; margin-top: 24px; border-top: 1
 @media (max-width: 560px) { .hbar-row { grid-template-columns: 1fr 52px; } .hbar-label { grid-column: 1 / -1; text-align: left; } }
 .results.heat td { border-bottom: 2px solid var(--panel); }
 .results th.name, .results td.name { text-align: left; }
+.grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+.results.cm td.diag { font-weight: 700; color: var(--accent); }
+.pill { display: inline-block; text-align: center; font-size: 0.75rem; padding: 0 6px; border-radius: 99px; border: 1px solid var(--border); }
+.pill.r0 { color: var(--risk0); border-color: var(--risk0); }
+.pill.r1 { color: var(--risk1); border-color: var(--risk1); }
+.pill.r2 { color: var(--risk2); border-color: var(--risk2); }
+.pill.r3 { color: var(--risk3); border-color: var(--risk3); }
+h4 { margin: 4px 0 8px; font-size: 0.92rem; }

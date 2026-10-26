@@ -5,6 +5,7 @@ The built frontend (frontend/dist) is served at / when present.
 """
 from __future__ import annotations
 
+import json
 import threading
 import traceback
 from functools import lru_cache
@@ -290,6 +291,10 @@ MODEL_INFO = {
     "fcm_tsk": ("FCM-TSK", "new", "Fuzzy C-means clusters, one zero-order TSK rule per cluster."),
     "ga_it2": ("GA-tuned IT2FIS", "new", "IT2FIS anchors and FOU width tuned by a genetic algorithm."),
     "pso_it2": ("PSO-tuned IT2FIS", "new", "IT2FIS anchors and FOU width tuned by particle swarm optimisation."),
+    "ann": ("ANN", "option_a", "Multilayer perceptron (16 tanh units, softmax) on level, rise and rain."),
+    "som_ann": ("SOM + ANN", "option_a", "4x4 self-organising map detects the flow regime; the ANN gets the regime as input."),
+    "ga_som_ann": ("GA + SOM + ANN", "option_a", "Genetic algorithm selects the input features from 14 candidates "
+                   "(lags, changes, rolling rain), then SOM + ANN."),
 }
 COMPARE_METRICS = ("f1", "precision", "recall", "fpr", "macro_f1_4class", "swe")
 
@@ -310,14 +315,16 @@ def comparison(ds_id: str):
         name, family, desc = MODEL_INFO.get(base, (base, "new", ""))
         models.append({
             "id": sysname, "name": name + (" + fusion" if fused else ""),
-            "family": "new+fusion" if fused else family,
+            "family": "fusion" if fused else family,
             "description": desc + (" Run on the reliability-weighted fused inputs." if fused else ""),
             "per_scenario": {s: {m: round(float(mean.loc[(sysname, s), m]), 4) for m in COMPARE_METRICS}
                              | {f"{m}_sd": round(float(sd.loc[(sysname, s), m]), 4) for m in COMPARE_METRICS}
                              for s in scen},
         })
+    best = config.RESULTS_DIR / f"model_comparison_{ds_id}_best.json"
     return {"dataset": ds_id, "seeds": int(df["seed"].nunique()), "scenarios": scen,
-            "metrics": list(COMPARE_METRICS), "models": models}
+            "metrics": list(COMPARE_METRICS), "models": models,
+            "best": json.loads(best.read_text()) if best.exists() else None}
 
 
 _dist = config.ROOT / "frontend" / "dist"

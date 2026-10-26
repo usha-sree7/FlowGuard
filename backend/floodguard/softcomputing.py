@@ -7,6 +7,7 @@
               (Gaussian MFs from the fuzzy cluster spread, consequent = membership-weighted target).
   ga_it2    : the IT2FIS with anchors and FOU width tuned by a real-coded genetic algorithm.
   pso_it2   : the same IT2FIS search space tuned by particle swarm optimisation.
+  ann, som_ann, ga_som_ann : the Option A hybrid (GA + SOM + ANN) and its ablation stages, see neural.py.
 
 Every model uses the same three inputs (level, rise, rain) and the same proxy labels. Each is run on the
 naive inputs (`<name>`) and on the reliability-weighted fused point inputs (`<name>+fusion`).
@@ -22,9 +23,10 @@ import numpy as np
 from .calibration import build_fis
 from .fuzzy.fis import INPUTS, RULES
 from .metrics import evaluate
+from .neural import FEATURES, HybridNet, candidate_features, ga_select
 
 CLASS_SCORE = np.array([10.0, 37.5, 62.5, 90.0])  # target score per risk class (same as the threshold system)
-MODELS = ("anfis", "fcm_tsk", "ga_it2", "pso_it2")
+MODELS = ("anfis", "fcm_tsk", "ga_it2", "pso_it2", "ann", "som_ann", "ga_som_ann")
 
 
 def _risk_class(y):
@@ -264,6 +266,21 @@ class SoftComputingModels:
             self.info[f"{method}_it2"] = {"validation_fitness_original": float(m.base_fitness),
                                           "validation_fitness_tuned": float(m.best_fitness),
                                           "genes": m.best.round(3).tolist()}
+        # Option A ablation ladder: ANN -> SOM + ANN -> GA + SOM + ANN
+        F = candidate_features(X)
+        args = (F[fit_m], y[fit_m], F[val_m], y[val_m])
+        say("ANN")
+        self.models["ann"] = HybridNet(False, mask=np.arange(len(FEATURES)) < 3, seed=self.seed).fit(*args)
+        say("SOM + ANN")
+        self.models["som_ann"] = HybridNet(True, mask=np.arange(len(FEATURES)) < 3, seed=self.seed).fit(*args)
+        say("GA feature selection for GA + SOM + ANN")
+        mask, hist = ga_select(*args, fitness=_fitness, seed=self.seed, say=say)
+        self.models["ga_som_ann"] = HybridNet(True, mask=mask, seed=self.seed).fit(*args)
+        for name in ("ann", "som_ann", "ga_som_ann"):
+            m = self.models[name]
+            self.info[name] = {"features": [f for f, k in zip(FEATURES, m.mask) if k],
+                               "validation_fitness": round(float(_fitness(labels[val_m], m.predict_features(F[val_m]))), 3)}
+        self.info["ga_som_ann"]["ga_best_fitness_per_generation"] = [round(h, 3) for h in hist]
         return self
 
     def predict_all(self, pipe, df) -> dict:
