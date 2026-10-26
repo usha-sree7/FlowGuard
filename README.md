@@ -94,7 +94,7 @@ cd frontend && npm run build           # type-check + production build
 
 ## Hosted demo
 
-A read-only demo of an **earlier** version runs at https://floodguard-ai-chi.vercel.app. To publish this version:
+This version (v0.6) runs read-only at **https://floodguard-ai-chi.vercel.app** (public, no login). To republish after changes:
 `python deploy/build_vercel.py && cd deploy/build && vercel deploy --prod` (needs the Vercel CLI).
 
 ## Documentation
