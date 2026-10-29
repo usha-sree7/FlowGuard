@@ -18,7 +18,9 @@ def binary(y_true, y_pred) -> dict:
     fn, tn = int((t & ~p).sum()), int((~t & ~p).sum())
     prec = tp / (tp + fp) if tp + fp else float("nan")
     rec = tp / (tp + fn) if tp + fn else float("nan")
-    f1 = 2 * prec * rec / (prec + rec) if (tp and prec + rec) else 0.0
+    # F1 is undefined (NaN) when the period contains no true positives at all: there is nothing to detect.
+    # It is 0 when positives exist but none were caught.
+    f1 = float("nan") if tp + fn == 0 else (2 * prec * rec / (prec + rec) if tp else 0.0)
     return {"tp": tp, "fp": fp, "fn": fn, "tn": tn, "precision": prec, "recall": rec, "f1": f1,
             "fpr": fp / (fp + tn) if fp + tn else float("nan"),
             "fnr": fn / (fn + tp) if fn + tp else float("nan"), "n": int(len(t))}
@@ -60,6 +62,8 @@ def block_bootstrap_f1(y_true, y_pred, block: int, n_boot: int = 1000, seed: int
     t = np.where(ok, y_true, 0) >= ALERT_CLASS
     p = np.asarray(y_pred) >= ALERT_CLASS
     n = len(t)
+    if not (t & ok).any():  # no true alerts in the test period: F1 and its interval are undefined
+        return [float("nan"), float("nan")]
     block = max(1, min(block, n))
     starts = np.arange(n - block + 1)
     rng = np.random.default_rng(seed)

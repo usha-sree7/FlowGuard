@@ -162,7 +162,96 @@ def read_malwathu_raw() -> tuple[pd.DataFrame, dict]:
     return out, info
 
 
-READERS = {"bengalas": read_bengalas_raw, "malwathu": read_malwathu_raw}
+CWC_STATION = "Chindnar"
+CWC_LEVEL_COL = "River Water Level Telemetry Hourly (meter)"
+CWC_RAIN_COL = "Telemetry Hourly Rainfall (mm)"
+CWC_TIME_COL = "Data Acquisition Time"
+RAIN_MAX_MM_PER_H = 100.0  # project plausibility limit for one hour at one gauge
+
+
+def _cwc_station(path: Path, value_col: str) -> tuple[pd.Series, dict]:
+    """Read one NWDP CWC telemetry CSV, keep the Chindnar rows, move off-hour readings to the NEXT full hour
+    (never earlier than measured, so no look-ahead).
+    Returns an hourly series indexed by timestamp and the counts needed for the quality report."""
+    raw = pd.read_csv(path, usecols=["Station", "Latitude", "Longitude", CWC_TIME_COL, value_col], low_memory=False)
+    if raw.empty or value_col not in raw.columns:
+        raise DatasetError(f"{path.name}: unexpected schema")
+    rows = raw[raw["Station"] == CWC_STATION]
+    if rows.empty:
+        raise DatasetError(f"{path.name}: no rows for station {CWC_STATION}")
+    t = pd.to_datetime(rows[CWC_TIME_COL], format="%d-%m-%Y %H:%M")
+    v = pd.to_numeric(rows[value_col], errors="coerce")
+    snapped = t.dt.ceil("h")
+    s = v.groupby(snapped.to_numpy()).mean().sort_index()
+    info = {
+        "file_rows_all_stations": int(len(raw)),
+        "station_rows": int(len(rows)),
+        "non_numeric_values": int(v.isna().sum()),
+        "readings_not_on_the_hour": int((t != t.dt.floor("h")).sum()),
+        "rows_merged_after_moving_to_next_hour": int(len(rows) - len(s)),
+        "lat_lon": [float(rows["Latitude"].iloc[0]), float(rows["Longitude"].iloc[0])],
+    }
+    return s, info
+
+
+def read_cwc_chindnar_raw() -> tuple[pd.DataFrame, dict]:
+    spec = DATASETS["cwc_chindnar"]
+    level_file, rain_file = (raw_dir(spec.id) / f.name for f in spec.files)
+    level, l_info = _cwc_station(level_file, CWC_LEVEL_COL)
+    rain, r_info = _cwc_station(rain_file, CWC_RAIN_COL)
+    if l_info["lat_lon"] != r_info["lat_lon"]:
+        raise DatasetError(f"Level and rain gauge are not co-located: {l_info['lat_lon']} vs {r_info['lat_lon']}")
+
+    # Level: remove physically implausible readings (below gauge zero or > 350 m RL) and missing values.
+    lo, hi = spec.level_bounds_m
+    level = level.dropna()
+    bad_level = (level < lo) | (level > hi)
+    level = level[~bad_level]
+    # Rain: the file lists only non-zero hours. Hours with a level reading and no rain record -> 0 mm (assumption).
+    # Readings above RAIN_MAX_MM_PER_H are treated as invalid (NaN, i.e. missing).
+    bad_rain = rain > RAIN_MAX_MM_PER_H
+    rain_on_level_hours = rain.index.isin(level.index)
+    gauge = rain.reindex(level.index).fillna(0.0)
+    gauge[gauge > RAIN_MAX_MM_PER_H] = np.nan
+
+    ts = level.index.to_series()
+    out = pd.DataFrame({
+        "t_hours": ((ts - ts.iloc[0]).dt.total_seconds() / 3600.0).to_numpy(),
+        "timestamp": ts.dt.strftime("%Y-%m-%d %H:%M:%S").to_numpy(),
+        "level": level.to_numpy(float),
+        "rain__gauge": gauge.to_numpy(float),
+    })
+    info = {
+        "station": CWC_STATION,
+        "level_file": l_info,
+        "rain_file": r_info,
+        "level_removed_outside_bounds": int(bad_level.sum()),
+        "level_bounds_m": [lo, hi],
+        "rain_records_above_limit_set_missing": int(bad_rain.sum()),
+        "rain_limit_mm_per_h": RAIN_MAX_MM_PER_H,
+        "rain_records_without_level_reading_dropped": int((~rain_on_level_hours).sum()),
+        "rain_hours_assumed_zero": int(len(level) - rain_on_level_hours.sum()),
+        "rain_total_mm_by_year_on_kept_rows": {str(y): round(float(v), 1) for y, v in
+                                               gauge.groupby(gauge.index.year).sum().items()},
+    }
+    return out, info
+
+
+READERS = {"bengalas": read_bengalas_raw, "malwathu": read_malwathu_raw, "cwc_chindnar": read_cwc_chindnar_raw}
+
+READER_STEPS = {
+    "bengalas": ["aggregated 504 radar cells to their arithmetic mean (rain__radar)",
+                 "validated out00h30m == next-step level (not used as input)"],
+    "malwathu": ["reconstructed continuous daily series from lag-structured rows (4,765 days)",
+                 "used metre-scaled Kappachichiya target column as level"],
+    "cwc_chindnar": [f"kept rows with Station == '{CWC_STATION}' from both basin/state-wide files",
+                     "checked that level and rain gauge share the same coordinates",
+                     "moved off-hour readings (mostly hh:30) to the next full hour; readings landing on the same hour averaged",
+                     "removed level readings outside 327.15-350 m RL (below gauge zero or physically implausible)",
+                     "rain hours with no record set to 0 mm (the file stores non-zero rain only)",
+                     f"rain readings above {RAIN_MAX_MM_PER_H:g} mm/h set to missing",
+                     "rain records at hours without a level reading dropped"],
+}
 
 
 # --------------------------------------------------------------------------- standardise + quality
@@ -226,12 +315,10 @@ def import_dataset(ds_id: str, download_files: bool = True, progress=None) -> di
     rep["processing_steps"] = [
         "verified SHA-256 of original download",
         "read original file(s) with documented column mapping (see registry.column_mapping)",
-        *(["aggregated 504 radar cells to their arithmetic mean (rain__radar)",
-           "validated out00h30m == next-step level (not used as input)"] if ds_id == "bengalas" else
-          ["reconstructed continuous daily series from lag-structured rows (4,765 days)",
-           "used metre-scaled Kappachichiya target column as level"]),
+        *READER_STEPS[ds_id],
         "computed t_hours, step_ok and rise_rate (only across one nominal step)",
-        "no rows dropped, no values imputed, no outliers removed in the processed copy",
+        "no rows dropped, no values imputed, no outliers removed in the processed copy" if ds_id != "cwc_chindnar"
+        else "no values interpolated; removed / assumed values are counted in reader_checks",
     ]
     df.to_csv(processed_path(ds_id), index=False)
     # Read back and validate before declaring it loaded.

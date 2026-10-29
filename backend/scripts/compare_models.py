@@ -65,9 +65,15 @@ def confidence_row(labels, cls, status):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset", choices=["bengalas", "malwathu"])
+    ap.add_argument("dataset", choices=["bengalas", "malwathu", "cwc_chindnar"])
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--markdown-only", action="store_true",
+                    help="rebuild MODEL_COMPARISON_<ds>.md from the saved JSON / CSV without re-running anything")
     a = ap.parse_args()
+    if a.markdown_only:
+        P = json.loads((config.RESULTS_DIR / f"comparison_{a.dataset}.json").read_text(encoding="utf-8"))
+        write_markdown(a.dataset, P, pd.read_csv(config.RESULTS_DIR / f"comparison_{a.dataset}_raw.csv"))
+        return
     t_start = time.time()
 
     df = load_processed(a.dataset, mode="full")
@@ -205,6 +211,11 @@ def write_markdown(ds, P, R):
           "thresholds " + ", ".join(f"{c} ≥ {t:.3f} m" for c, t in zip(meta['risk_classes'][1:], meta['thresholds_m']))
           + " (mean + 0.5/1/2/3 sd). They are not observed flood records. Positive class for precision / recall / F1 / "
           "FPR: " + meta["positive_class"] + ". The threshold rule is a reference only: the labels are built from it.", ""]
+    no_alerts = [s["label"] for s in P["support"].values() if s["test_alerts"] == 0]
+    if no_alerts:
+        md += [f"> **No alert (High / Critical) occurs in the test period at {', '.join(no_alerts)}.** Alert precision, "
+               "recall and F1 are therefore undefined (shown as —); only false alarms, FPR and the 5-level metrics "
+               "(macro F1, κ) are meaningful. Do not read these tables as flood-detection skill.", ""]
     for h, hl in meta["horizons"].items():
         md += [f"## {hl} ahead", "", "Clean test data:", "",
                "| Model | Input | Alert F1 [95 % CI] | Precision | Recall | FPR | Macro F1 (5 cl.) | κ | Missed alerts | False alarms |",
@@ -222,6 +233,12 @@ def write_markdown(ds, P, R):
         for (mode, m), r in f1.iterrows():
             md.append(f"| {meta['models'][m]} | {mode} | " + " | ".join(fm(r[s]) for s in SCENARIOS)
                       + f" | **{fm(r[FAULTED].mean())}** |")
+        mf = sub.groupby(["mode", "model", "scenario"])["macro_f1"].mean().unstack()
+        md += ["", "5-level macro F1 per simulated fault (mean over seeds; defined even when no alert occurs):", "",
+               "| Model | Input | " + " | ".join(SCENARIOS) + " | Faulted mean |", "|---|---|" + "---|" * (len(SCENARIOS) + 1)]
+        for (mode, m), r in mf.iterrows():
+            md.append(f"| {meta['models'][m]} | {mode} | " + " | ".join(fm(r[s]) for s in SCENARIOS)
+                      + f" | **{fm(r[FAULTED].mean())}** |")
         md.append("")
     md += ["## Fault detection by the reliability checks", "",
            "Flag = reliability < 0.5 on any channel, scored against the known injection mask.", "",
@@ -231,12 +248,14 @@ def write_markdown(ds, P, R):
         md.append(f"| {s} | {fm(r['faulty_share'])} | {fm(r['flag_rate'])} | {fm(r['precision'])} | "
                   f"{fm(r['recall'])} | {fm(r['f1'])} |")
     md += ["", "## Horizon support check (clean test data)", "",
-           "| Horizon | Labelled test rows | Test alerts | Class changes vs now | New alert onsets | Persistence MAE [m] | ARX MAE [m] |",
+           "MAE / RMSE are genuine numerical errors of the forecast water level h steps ahead (not of the risk class).", "",
+           "| Horizon | Labelled test rows | Test alerts | Class changes vs now | New alert onsets | Persistence MAE / RMSE [m] | ARX MAE / RMSE [m] |",
            "|---|---|---|---|---|---|---|"]
     for h, s in P["support"].items():
         f = P["forecast"][h]
         md.append(f"| {s['label']} | {s['test_labelled']} | {s['test_alerts']} | {fm(s['class_changes_share'])} | "
-                  f"{s['new_alert_onsets']} | {fm(f['persistence']['mae'], 4)} | {fm(f['arx']['mae'], 4)} |")
+                  f"{s['new_alert_onsets']} | {fm(f['persistence']['mae'], 4)} / {fm(f['persistence']['rmse'], 4)} | "
+                  f"{fm(f['arx']['mae'], 4)} / {fm(f['arx']['rmse'], 4)} |")
     if meta["unsupported_horizons"]:
         md += ["", "Not supported by the sampling interval: " + ", ".join(meta["unsupported_horizons"]) + "."]
     (config.RESULTS_DIR / f"MODEL_COMPARISON_{ds}.md").write_text("\n".join(md) + "\n", encoding="utf-8")

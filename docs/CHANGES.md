@@ -1,3 +1,35 @@
+# Changes: v0.7, Indian CWC data, verified literature, honest metrics (2026-10-29, review preparation)
+
+## Data
+* **New dataset `cwc_chindnar`**: CWC hourly telemetry at Chindnar (Indravati River, Chhattisgarh) from the National
+  Water Data Portal. Hourly level and a rain gauge at identical coordinates. The earlier claim that NWDP offers "daily
+  only" data was wrong and is corrected (`docs/INDIAN_DATA_AUDIT.md`, `DATASET_DOCUMENTATION.md` §5).
+* Cleaning rules are explicit and counted: off-hour readings moved to the **next** full hour (no look-ahead; the first
+  version used pandas `round`, which sends hh:30 to the even hour, sometimes earlier than measured, and was replaced),
+  103 impossible levels removed, 13 rain values > 100 mm/h set missing, missing rain hours assumed dry.
+* `scripts/audit_cwc.py` screens every CWC station in a basin file (stuck share, outliers, nearest rain gauge).
+* NWDP states no licence: raw files are not redistributed and `deploy/build_vercel.py` excludes `cwc_*` data.
+
+## Metrics and reporting
+* **Alert F1 is now undefined (NaN, shown as —) when a test period contains no true alert.** Previously it was printed
+  as 0.000, which wrongly suggests total failure. Chindnar's test period (Feb 2024 to May 2025) has no level above the
+  High threshold, so its alert metrics are undefined and the dashboard says so. Model selection (`patterns._fitness`)
+  treats an undefined F1 as 0, so behaviour on Bengalas / Malwathu is unchanged.
+* Reports now list water-level **MAE and RMSE** (persistence, ARX) and a **5-level macro F1 per fault** table.
+  `compare_models.py --markdown-only` rebuilds a report from saved results.
+* Dashboard: data-quality summary on the Dataset tab, MAE / RMSE panel and "no alerts in test period" warning on Compare,
+  episode replay falls back to the highest level reached (Moderate on Chindnar), dataset-specific rain units.
+
+## Reproducibility note
+Re-running all comparisons on 2026-10-29 (numpy 2.5.4, pandas 3.1.0 instead of numpy 2.3.2, pandas 3.0.6) reproduced
+Malwathu exactly and Bengalas exactly **except SOM at 3 h** (clean F1 0.582 → 0.600, inside the confidence interval).
+The SOM weights already differ at the 16th digit of the input scaling, which training then amplifies, so this is
+floating-point sensitivity, not a code change.
+
+## Documentation
+`docs/LITERATURE_REVIEW.md` (six papers checked against Crossref, with corrected details), `docs/CODE_GUIDE.md`
+(beginner guide + feature status).
+
 # Changes: v0.6, four-technique dashboard (IT2FIS, PSO, SOM, ANFIS) (2026-10-26, third pass)
 
 The project brief now asks for a comparison of exactly **IT2FIS, SOM, PSO and ANFIS**, five alert levels, and a

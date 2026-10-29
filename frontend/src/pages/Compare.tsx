@@ -39,7 +39,7 @@ function PsoPanel({ d, h, dataset }: { d: any; h: string; dataset: string }) {
             <thead><tr><th></th><th>Untuned IT2FIS</th><th>PSO-tuned</th><th>Change</th></tr></thead>
             <tbody>
               <tr><td>Validation objective (used for tuning)</td><td>{fmt(p.validation_fitness_untuned)}</td><td>{fmt(p.validation_fitness_tuned)}</td><td>{fmt(p.validation_fitness_tuned - p.validation_fitness_untuned)}</td></tr>
-              <tr><td>Test alert F1</td><td>{fmt(it2.f1)}</td><td>{fmt(pso.f1)}</td><td>{(pso.f1 >= it2.f1 ? '+' : '') + fmt(pso.f1 - it2.f1)}</td></tr>
+              <tr><td>Test alert F1</td><td>{fmt(it2.f1)}</td><td>{fmt(pso.f1)}</td><td>{pso.f1 == null || it2.f1 == null ? '—' : (pso.f1 >= it2.f1 ? '+' : '') + fmt(pso.f1 - it2.f1)}</td></tr>
               <tr><td>Test precision / recall</td><td>{fmt(it2.precision)} / {fmt(it2.recall)}</td><td>{fmt(pso.precision)} / {fmt(pso.recall)}</td><td></td></tr>
               <tr><td>Test macro F1 (5 levels)</td><td>{fmt(it2.macro_f1)}</td><td>{fmt(pso.macro_f1)}</td><td>{fmt(pso.macro_f1 - it2.macro_f1)}</td></tr>
               <tr><td>Missed alerts / false alarms</td><td>{it2.missed_alerts} / {it2.false_alarms}</td><td>{pso.missed_alerts} / {pso.false_alarms}</td><td></td></tr>
@@ -107,8 +107,11 @@ export default function Compare({ dataset }: { dataset: string }) {
               <button className={mode === 'fused' ? 'on' : ''} onClick={() => setMode('fused')}>On (fused)</button>
             </div>
           </label>
-          {meta.unsupported_horizons.length > 0 && <span className="small muted">{meta.unsupported_horizons.join(', ')}: not possible with daily data.</span>}
+          {meta.unsupported_horizons.length > 0 && <span className="small muted">{meta.unsupported_horizons.join(', ')}: not possible at this sampling interval.</span>}
         </div>
+        {lc.High + lc.Critical === 0 && <div className="error" style={{ marginTop: 10 }}>
+          <b>No High or Critical level occurs in this test period.</b> Alert precision, recall and F1 are undefined (shown as —), so this dataset
+          cannot show flood-detection skill. Only false alarms, FPR, the 5-level metrics (macro F1, κ) and the water-level MAE / RMSE below are meaningful.</div>}
       </div>
 
       <div className="panel">
@@ -133,7 +136,7 @@ export default function Compare({ dataset }: { dataset: string }) {
           ms / step excludes the reliability layer ({fmt(ms.reliability_layer, 4)} ms / step when on).</p>
       </div>
 
-      <div className="grid2">
+      {lc.High + lc.Critical > 0 && <div className="grid2">
         <div className="panel">
           <h3>Precision, recall and F1</h3>
           <GroupedBars groups={MODELS.map((m) => { const c = clean(d, h, mode, m); return { label: meta.models[m], values: [c.precision, c.recall, c.f1], lo: [null, null, c.f1_ci95[0]], hi: [null, null, c.f1_ci95[1]] } })}
@@ -145,6 +148,18 @@ export default function Compare({ dataset }: { dataset: string }) {
             series={MODELS.map((m) => ({ label: meta.models[m], color: MODEL_COLOR[m] }))} />
           <p className="muted small">Skill falls with lead time for every model: the further ahead, the less the current readings say about the future level.</p>
         </div>
+      </div>}
+
+      <div className="panel">
+        <h3>Numerical water-level forecast (genuine regression errors)</h3>
+        <table className="results">
+          <thead><tr><th>Horizon</th><th>Persistence MAE</th><th>Persistence RMSE</th><th>ARX MAE</th><th>ARX RMSE</th><th>Test points</th></tr></thead>
+          <tbody>{horizonsList.map((k) => { const f = d.forecast[k]; return (
+            <tr key={k}><td>{meta.horizons[k]}</td><td>{fmt(f.persistence.mae, 4)} m</td><td>{fmt(f.persistence.rmse, 4)} m</td>
+              <td className={f.arx.mae < f.persistence.mae ? 'best' : ''}>{fmt(f.arx.mae, 4)} m</td><td>{fmt(f.arx.rmse, 4)} m</td><td>{f.arx.n.toLocaleString()}</td></tr>) })}</tbody>
+        </table>
+        <p className="muted small">MAE and RMSE apply only to models that predict a number: here the future water level. Persistence = "the level stays as it is" (no-skill reference);
+          ARX = linear auto-regressive forecaster with rain, fitted on the fit block. The four soft-computing models output a risk class, so they are scored with classification metrics above, not MAE / RMSE.</p>
       </div>
 
       <div className="panel">

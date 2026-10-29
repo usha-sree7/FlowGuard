@@ -41,7 +41,7 @@ def test_api_endpoints():
     c = TestClient(app)
     assert c.get("/api/health").json()["ok"]
     ds = c.get("/api/datasets").json()
-    assert {d["id"] for d in ds["datasets"]} == {"bengalas", "malwathu"}
+    assert {d["id"] for d in ds["datasets"]} == {"bengalas", "malwathu", "cwc_chindnar"}
     m = c.get("/api/model/bengalas", params={"horizon": 2}).json()
     assert len(m["fis"]["rules"]) == 80 and len(m["curves"]["level"]["terms"]) == 5 and "tuned_curves" in m
     r = c.get("/api/replay/bengalas", params={"scenario": "spikes", "limit": 50, "mode": "fused"}).json()
@@ -51,7 +51,8 @@ def test_api_endpoints():
     r = c.get("/api/replay/bengalas", params={"limit": 30, "horizon": 6, "model": "anfis", "at": 10}).json()
     assert r["horizon_label"] == "3 h" and r["at"] == 10 and r["explanations"]["anfis"]["reasons"]
     assert c.get("/api/replay/bengalas", params={"horizon": 5}).status_code == 400
-    assert c.get("/api/episodes/bengalas").json()["total"] > 0
+    ep = c.get("/api/episodes/bengalas").json()
+    assert ep["total"] > 0 and ep["episode_class"] == "High"
     for path in ("/api/references", "/api/datasets/bengalas/preview", "/api/assess/bengalas/options"):
         assert c.get(path).status_code == 200
     refs = c.get("/api/references").json()["references"]
@@ -73,3 +74,9 @@ def test_failed_download_gives_manual_instructions_and_is_not_loaded(tmp_path, m
         loaders.import_dataset("malwathu")
     assert "Download manually" in str(e.value)
     assert not loaders.is_loaded("malwathu")
+
+
+@pytest.mark.skipif(not is_loaded("cwc_chindnar"), reason="cwc_chindnar not imported")
+def test_cwc_episodes_fall_back_to_highest_level_reached():
+    ep = TestClient(app).get("/api/episodes/cwc_chindnar").json()
+    assert ep["episode_class"] == "Moderate" and ep["total"] > 0  # no High level in the Chindnar test period

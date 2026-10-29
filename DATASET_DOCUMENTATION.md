@@ -2,15 +2,17 @@
 
 Every value in this document was read from the imported files, their quality reports (`data/processed/<id>.quality.json`), the
 dataset registry (`backend/floodguard/datasets/registry.py`) or the stored evaluation metadata (`results/comparison_<id>.json`).
-Source pages were checked on **2026-10-26**.
+Source pages were checked on **2026-10-26**; Indian sources re-checked on **2026-10-29** (`docs/INDIAN_DATA_AUDIT.md`).
 
 ## 1. Decision in one paragraph
 
 HydroSentinel AI keeps the **Bengalas River (Brazil)** dataset as its primary data and the **Malwathu Oya (Sri Lanka)** dataset as a daily
-generalisation check. Indian sources were investigated first (Section 5). None of them offers an openly downloadable record with
-**co-located river water level and rainfall at 30-min or hourly resolution**, which the 30 min / 1 h / 3 h experiments need. The Bengalas
-data does: water level and rainfall from the same hydrological station at 30-min steps for five years, with a peer-reviewed source and an
-open licence. **No data in this project comes from IMD, CWC, India-WRIS or NWDP.** The study region is Petrópolis, Rio de Janeiro State, Brazil.
+generalisation check. A third dataset, **CWC hourly telemetry at Chindnar (Indravati River, Chhattisgarh, India)** from the National
+Water Data Portal, was added on 2026-10-29 (Section 5 and `docs/INDIAN_DATA_AUDIT.md`). It has co-located hourly level and rain, but
+also serious quality problems (non-zero-only rain records, implausible values, gaps), no licence statement and **no alert-level event
+in its test period**, so it serves as an Indian data-integration and robustness check, not as evidence of flood-detection skill.
+Bengalas remains primary: water level and rainfall from the same station at 30-min steps for five years, with a peer-reviewed source
+and an open licence. IMD and India-WRIS data are **not** used.
 
 ## 2. Primary dataset: Bengalas River (UAE-ML)
 
@@ -73,7 +75,7 @@ open licence. **No data in this project comes from IMD, CWC, India-WRIS or NWDP.
 | [India Meteorological Department](https://mausam.imd.gov.in/) | Rainfall (station and gridded), daily. No river level | No: no co-located water level |
 | [Central Water Commission](https://cwc.gov.in/) | Gauge level is read hourly only in the monsoon (three readings/day otherwise). Validated archives are released through India-WRIS to registered users | Not openly, not continuously sub-daily |
 | [CWC Flood Forecasting System](https://ffs.india-water.gov.in/) | Live hydrographs for roughly the last 72 h | No bulk history found |
-| [National Water Data Portal](https://nwdp.nwic.gov.in/) | Lists daily CWC river discharge and daily IMD rainfall | Daily only; no sub-daily level found |
+| [National Water Data Portal](https://nwdp.nwic.gov.in/) | **Corrected 2026-10-29:** also hosts *hourly* CWC telemetry: [river water level](https://nwdp.nwic.gov.in/en/dataset/river-water-level-telemetry-hourly-central-water-commission-cwc) (per basin) and [rainfall](https://nwdp.nwic.gov.in/dataset/rainfall-cwc-telemetry-hourly) (per state), direct CSV download, no licence stated | **Yes: Chindnar integrated** as `cwc_chindnar` (see `docs/INDIAN_DATA_AUDIT.md`) |
 | [India-WRIS](https://indiawris.gov.in/wris/) | Script-only application (timed out on the first check); downloads need registration | A level + rain archive could not be verified |
 | CAMELS-IND: Mangukiya et al. (2025), *Earth System Science Data* 17, 461–491, doi:[10.5194/essd-17-461-2025](https://doi.org/10.5194/essd-17-461-2025); data doi:[10.5281/zenodo.14005378](https://doi.org/10.5281/zenodo.14005378) | Verified open Indian dataset: 472 catchments, 1980–2020, **daily** streamflow and meteorological forcings, no water level | Not for sub-daily horizons. **Best candidate for a future daily Indian check** (a discharge-threshold proxy, like Malwathu) |
 
@@ -87,11 +89,11 @@ session. Someone with India-WRIS registration should test it before anyone claim
 2. Verify SHA-256 against the pinned value; a mismatch aborts.
 3. Read the schema and fail loudly if an expected column is missing.
 4. Check reader assumptions (Bengalas: `out00h30m` = next level; Malwathu: lag columns = previous row).
-5. Standardise to `t_hours, timestamp, level, rain__*, step_ok, rise_rate` in `data/processed/<id>.csv`. **No rows dropped, no imputation, no outlier removal.**
+5. Standardise to `t_hours, timestamp, level, rain__*, step_ok, rise_rate` in `data/processed/<id>.csv`. Bengalas / Malwathu: **no rows dropped, no imputation, no outlier removal.** CWC Chindnar: documented cleaning rules (impossible levels removed, rain > 100 mm/h set missing, missing rain hours assumed dry), each counted in the quality report.
 6. Read the processed file back, validate it, and write the quality report.
 7. Simulated faults are applied only to an in-memory copy of the test split. Ground-truth masks are stored separately and labels always come from the original data.
 
-Import with `python backend/scripts/import_dataset.py bengalas` (and `malwathu`). See `docs/DATASET_GUIDE.md` for details.
+Import with `python backend/scripts/import_dataset.py bengalas` (and `malwathu`, `cwc_chindnar`). See `docs/DATASET_GUIDE.md` for details.
 
 ## 7. Limitations
 
@@ -99,4 +101,4 @@ Import with `python backend/scripts/import_dataset.py bengalas` (and `malwathu`)
 * Rain units and timezone are undocumented for Bengalas. The rain unit is ambiguous and there are no dates for Malwathu.
 * One level sensor per site, so level faults cannot be cross-checked against a redundant level gauge.
 * The sensor faults are simulated. Neither dataset labels real sensor failures.
-* Not Indian data. Conclusions about Indian rivers would need re-validation (Section 5).
+* Indian data (Chindnar) is a single station whose test period has no alert-level event, so no Indian flood-detection skill is claimed (Section 5).

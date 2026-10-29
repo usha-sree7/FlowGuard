@@ -28,8 +28,13 @@ How PSO, SOM and ANFIS work mathematically: `docs/MATHEMATICAL_MODEL.md` §5.
 * **Bengalas River, Petrópolis, Brazil** (primary): 72,011 × 30-min records, 2019-01-04 14:30 → 2023-12-31 16:00, station 221342310, from the MIT-licensed UAE-ML repository of Soares et al., *Transactions in GIS* 30(2) e70254 (2026), doi:10.1111/tgis.70254. Water level [m], station rain gauge and a 504-cell weather-radar grid (rain units not documented in the source).
 * **Malwathu Oya, Sri Lanka** (generalisation check): 4,765 daily records (2005–2018, no dates in the file) from Rathnayake et al., *PLOS ONE* 18(4) e0282847 (2023).
 * **Labels are proxies.** No flood events are recorded. The label is the alert level of the water level *actually observed* h steps later, using train-split thresholds μ + 0.5 / 1 / 2 / 3 σ (Bengalas 0.993 / 1.137 / 1.427 / 1.716 m). **Alert = High or Critical** (≥ μ + 2σ, the paper's flood-threshold rule).
-* **Horizons (checked):** Bengalas supports 30 min, 1 h and 3 h. Malwathu is daily, so only 1 day is supported; sub-daily horizons are reported as unsupported.
-* Indian sources (IMD, CWC, India-WRIS, NWDP, CAMELS-IND) were checked: none offers open, co-located sub-daily level + rain data.
+* **Horizons (checked):** Bengalas supports 30 min, 1 h and 3 h; Chindnar (hourly) 1 h and 3 h. Malwathu is daily, so only 1 day is supported; finer horizons are reported as unsupported.
+* **Indravati River at Chindnar, Chhattisgarh, India** (Indian data check): 22,578 hourly records, 2021-01-01 → 2025-05-17, CWC telemetry
+  water level [m RL] and a rain gauge at the same coordinates [mm/h], downloaded from the National Water Data Portal (NWDP).
+  Real quality problems are documented and handled with counted rules (`docs/INDIAN_DATA_AUDIT.md`): 103 impossible levels removed,
+  13 rain values > 100 mm/h set missing, missing rain hours assumed dry (the source lists non-zero rain only), 1,944 gaps.
+  NWDP states no licence, so the raw files are downloaded by the importer and NWDP-derived data is excluded from the hosted demo.
+* IMD offers no open bulk station download and no river level, so IMD data is not used.
 
 ## Results (held-out test period; full tables in `results/MODEL_COMPARISON_*.md`)
 
@@ -51,6 +56,12 @@ What the numbers support:
 * **Reliability layer:** clearly helps against spikes for every model and helps ANFIS under noise. It costs a little on clean data and with missing readings. Its checks detect missing data almost perfectly but catch few stuck (3 %) or conflicting-rain (1 %) faults.
 * **Lead time:** skill falls with horizon for every model (IT2FIS 0.935 → 0.887 → 0.664). At 3 h the level class changes on 10 % of steps, versus 2.7 % at 30 min.
 * **Daily data (Malwathu, 1 day):** IT2FIS = PSO-IT2FIS 0.864, SOM 0.820, ANFIS 0.661 (very wide interval: only 66 alert days in the test period).
+* **Indian hourly data (Chindnar):** the test period (Feb 2024 → May 2025) contains **no** level above the High threshold (337.8 m;
+  the 2024 monsoon peaked at 336.9 m), so **alert precision / recall / F1 are undefined** and no Indian flood-detection skill is claimed.
+  What can be compared (1 h, raw inputs): 5-level macro F1 ANFIS 0.926, IT2FIS = PSO-IT2FIS 0.901, SOM 0.681; false alarms 1 / 4 / 4 / 30.
+  The validation block has no alerts either, so PSO's objective reduces to macro F1: at 1 h it kept the untuned system, at 3 h its
+  tuning lowered test macro F1 (0.855 → 0.833), which is an overfitting example. Under medium noise, macro F1 falls to about 0.6 for
+  ANFIS and the IT2 models and to 0.26 for SOM. Water level 1 h ahead: persistence MAE 0.013 m / RMSE 0.152 m, ARX 0.021 / 0.152 m.
 
 ## Requirements and setup
 
@@ -61,7 +72,9 @@ cd backend
 pip install -r requirements.txt
 python scripts/import_dataset.py bengalas     # download (41.5 MB) + checksum + validate
 python scripts/import_dataset.py malwathu
+python scripts/import_dataset.py cwc_chindnar  # downloads 186 MB + 6 MB from NWDP
 python scripts/compare_models.py malwathu --seeds 3   # ~20 s
+python scripts/compare_models.py cwc_chindnar --seeds 3   # ~4 min
 python scripts/compare_models.py bengalas --seeds 3   # ~11 min; the website reads these results
 python scripts/write_references.py                    # regenerates REFERENCES.md
 
@@ -98,6 +111,8 @@ This version (v0.6) runs read-only at **https://floodguard-ai-chi.vercel.app** (
 `python deploy/build_vercel.py && cd deploy/build && vercel deploy --prod` (needs the Vercel CLI).
 
 ## Documentation
+
+**New for the 30 Oct review:** `docs/INDIAN_DATA_AUDIT.md` (CWC / NWDP / IMD verification) · `docs/LITERATURE_REVIEW.md` (six papers, Crossref-verified, research gap) · `docs/CODE_GUIDE.md` (beginner guide to every file + feature status).
 
 `DATASET_DOCUMENTATION.md` · `REFERENCES.md` (Crossref-verified) · `docs/CHANGES.md` (what changed and why, incl. disclosed design changes) · `docs/VIVA_QA.md` · `docs/DEMO_SEQUENCE.md` · `docs/MATHEMATICAL_MODEL.md` · `docs/EXPERIMENT_PROTOCOL.md`.
 `docs/FloodGuard_Project_Guide.pdf` describes an earlier version and is kept for history only.

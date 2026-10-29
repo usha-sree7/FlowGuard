@@ -51,7 +51,16 @@ export default function Overview({ dataset, go }: { dataset: string; go: (t: str
   const step = spec ? (spec.step_hours < 1 ? `${spec.step_hours * 60} min` : spec.step_hours === 24 ? 'daily' : `${spec.step_hours} h`) : ''
 
   const findings: string[] = []
-  if (d) {
+  const lc = d?.meta.label_counts_test[h]
+  if (d && lc.High + lc.Critical === 0) {
+    // No alert in the test period: alert F1 is undefined, so report the 5-level macro F1 and false alarms instead.
+    const rows = MODELS.map((m) => ({ m, c: clean(d, h, 'raw', m) })).sort((a, b) => b.c.macro_f1 - a.c.macro_f1)
+    findings.push(`The test period contains no High or Critical level, so alert precision, recall and F1 are undefined: this dataset cannot show flood-detection skill.`)
+    findings.push(`5-level agreement (macro F1), ${d.meta.horizons[h]} ahead: ${rows.map(({ m, c }) => `${d.meta.models[m]} ${fmt(c.macro_f1)}`).join(', ')}. False alarms: ${rows.map(({ m, c }) => `${d.meta.models[m]} ${c.false_alarms}`).join(', ')}.`)
+    const faulted = d.meta.scenarios.filter((s: string) => s !== 'clean')
+    const mean = (mode: string) => MODELS.reduce((a, m) => a + faulted.reduce((b: number, s: string) => b + d.risk[`${h}|${s}|${mode}|${m}`].macro_f1, 0) / faulted.length, 0) / MODELS.length
+    findings.push(`Under simulated sensor faults, the average macro F1 of the four models is ${fmt(mean('raw'))} on raw inputs and ${fmt(mean('fused'))} with the reliability layer.`)
+  } else if (d) {
     const rows = MODELS.map((m) => ({ m, c: clean(d, h, 'raw', m) })).sort((a, b) => b.c.f1 - a.c.f1)
     const top = rows[0], second = rows[1]
     findings.push(separated(top.c, second.c)
@@ -82,7 +91,9 @@ export default function Overview({ dataset, go }: { dataset: string; go: (t: str
         <div className="fact"><span>Dataset</span><b>{spec ? spec.name.split(' - ')[0] : '…'}</b></div>
         <div className="fact"><span>Period</span><b>{q ? (q.first ? `${q.first.slice(0, 10)} → ${q.last.slice(0, 10)}` : '2005–2018 (years only)') : '…'}</b></div>
         <div className="fact"><span>Sampling</span><b>{step}{q ? ` · ${q.rows.toLocaleString()} records` : ''}</b></div>
-        <div className="fact"><span>Source</span><b>{spec ? <a href={`https://doi.org/${spec.doi}`} target="_blank" rel="noreferrer">{spec.paper_ref.split(';')[0].split(',')[0]} et al.</a> : '…'}</b></div>
+        <div className="fact"><span>Source</span><b>{!spec ? '…' : spec.doi
+          ? <a href={`https://doi.org/${spec.doi}`} target="_blank" rel="noreferrer">{spec.paper_ref.split(';')[0].split(',')[0]} et al.</a>
+          : <a href={spec.repo} target="_blank" rel="noreferrer">CWC via NWDP (India)</a>}</b></div>
         <div className="fact"><span>Labels</span><b>Proxy: future level vs thresholds</b></div>
       </div>
 

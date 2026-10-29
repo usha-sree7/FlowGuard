@@ -26,8 +26,8 @@ function DatasetCard({ dataset, d }: { dataset: string; d: any }) {
       <div className="panel">
         <h2>{spec.name}</h2>
         <table className="kv"><tbody>
-          <tr><th>Published with</th><td>{spec.paper_ref}. <i>{spec.paper_title}</i>. <a href={`https://doi.org/${spec.doi}`} target="_blank" rel="noreferrer">doi:{spec.doi}</a></td></tr>
-          <tr><th>Source / download</th><td><a href={spec.repo} target="_blank" rel="noreferrer">{spec.repo}</a> (commit <code>{spec.repo_commit.slice(0, 10)}</code>) · file <a href={spec.files[0].url}>{spec.files[0].name}</a>, SHA-256 checked on import · {spec.licence}</td></tr>
+          <tr><th>{spec.doi ? 'Published with' : 'Publisher'}</th><td>{spec.paper_ref}. <i>{spec.paper_title}</i>.{spec.doi && <> <a href={`https://doi.org/${spec.doi}`} target="_blank" rel="noreferrer">doi:{spec.doi}</a></>}</td></tr>
+          <tr><th>Source / download</th><td><a href={spec.repo} target="_blank" rel="noreferrer">{spec.repo}</a> ({spec.doi ? <>commit <code>{spec.repo_commit.slice(0, 10)}</code></> : spec.repo_commit}) · {spec.files.length > 1 ? 'files' : 'file'} {spec.files.map((f: any, i: number) => <span key={f.name}>{i > 0 && ', '}<a href={f.url}>{f.name}</a></span>)}, SHA-256 checked on import · {spec.licence}</td></tr>
           <tr><th>Location</th><td>{spec.location}</td></tr>
           <tr><th>Timestamps</th><td>{spec.period_claimed}{spec.step_hours >= 24 ? '' : '. Timezone not stated in the source; treated as local time.'}</td></tr>
           <tr><th>Sampling</th><td>{spec.resolution}{q ? ` · ${q.rows.toLocaleString()} records` : ''}</td></tr>
@@ -36,6 +36,12 @@ function DatasetCard({ dataset, d }: { dataset: string; d: any }) {
             <li><code>rise_rate</code> (derived): level change per hour over exactly one step [m/h], never computed across a gap.</li>
             {meta && <li><code>rain</code> model input (derived): rain accumulated over the last {meta.rain_window_hours} h.</li>}
           </ul></td></tr>
+          {q && <tr><th>Data quality</th><td><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            <li>{q.rows.toLocaleString()} records, {q.steps_at_nominal.toLocaleString()} exactly one step apart; {q.gaps.toLocaleString()} gaps (largest {fmt(q.largest_gap_hours, 1)} h); {q.duplicate_timestamps} duplicate timestamps.</li>
+            <li>Missing values after import: {Object.entries(q.missing_values).map(([k, v]: any) => `${k} ${v}`).join(', ')}.</li>
+            {q.reader_checks?.level_removed_outside_bounds !== undefined && <li>Removed as implausible: {q.reader_checks.level_removed_outside_bounds} level readings outside {q.reader_checks.level_bounds_m.join('–')} m; {q.reader_checks.rain_records_above_limit_set_missing} rain readings above {q.reader_checks.rain_limit_mm_per_h} mm/h set to missing.</li>}
+            {q.reader_checks?.rain_hours_assumed_zero !== undefined && <li>{q.reader_checks.rain_hours_assumed_zero.toLocaleString()} of {q.rows.toLocaleString()} hours have no rain record and are assumed dry (0 mm): the source lists non-zero rain only.</li>}
+          </ul></td></tr>}
           <tr><th>Label generation</th><td>
             <b>No recorded flood events exist in this dataset</b>, so labels are <b>proxy labels</b>. The label for time t at horizon h is the alert level of the water level <i>actually observed</i> at t + h,
             using thresholds computed from the training period only{meta ? `: ${RISK.slice(1).map((r, i) => `${r} ≥ ${fmt(meta.thresholds_m[i], 3)} m (mean + ${meta.level_k[i]} sd)`).join(', ')}` : ''}.

@@ -17,7 +17,7 @@ from floodguard.faults import SCENARIOS  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset", choices=["bengalas", "malwathu"])
+    ap.add_argument("dataset", choices=["bengalas", "malwathu", "cwc_chindnar"])
     ap.add_argument("--mode", choices=["full", "sample"], default="full")
     ap.add_argument("--seed", type=int, default=config.DEFAULT_SEED)
     ap.add_argument("--sample-rows", type=int, default=10_000)

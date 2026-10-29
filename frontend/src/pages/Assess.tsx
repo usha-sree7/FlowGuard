@@ -13,7 +13,7 @@ function Controls({ horizons, h, setH, mode, setMode, unsupported }: any) {
     <>
       <label className="ctl">Forecast horizon
         <div className="chips">{Object.entries(horizons).map(([k, n]: any) => <button key={k} className={`chip small ${h === k ? 'on' : ''}`} onClick={() => setH(k)}>{n}</button>)}</div>
-        {unsupported?.length > 0 && <span className="small">Not available on this dataset: {unsupported.join(', ')} (daily data)</span>}
+        {unsupported?.length > 0 && <span className="small">Not available on this dataset: {unsupported.join(', ')} (sampling interval too coarse)</span>}
       </label>
       <label className="ctl">Reliability layer
         <div className="toggle">
@@ -26,7 +26,8 @@ function Controls({ horizons, h, setH, mode, setMode, unsupported }: any) {
 }
 
 function Replay({ dataset, opts }: { dataset: string; opts: any }) {
-  const [eps, setEps] = useState<any[]>([])
+  const [eps, setEps] = useState<any[] | null>(null)
+  const [epClass, setEpClass] = useState<string | null>(null)
   const [ep, setEp] = useState(0)
   const [h, setH] = useState(String(opts.default_horizon))
   const [mode, setMode] = useState('raw')
@@ -35,10 +36,10 @@ function Replay({ dataset, opts }: { dataset: string; opts: any }) {
   const [r, setR] = useState<any>(null)
   const [sel, setSel] = useState('it2_fis')
   const [err, setErr] = useState('')
-  const daily = opts.rain_window_hours >= 24
+  const daily = (opts.step_hours ?? 0) >= 24
   const W = daily ? 60 : 96
-  useEffect(() => { api(`/episodes/${dataset}`).then((x) => setEps(x.episodes)).catch((e) => setErr(e.message)) }, [dataset])
-  const e = eps[ep]
+  useEffect(() => { api(`/episodes/${dataset}`).then((x) => { setEps(x.episodes); setEpClass(x.episode_class) }).catch((e) => setErr(e.message)) }, [dataset])
+  const e = eps?.[ep]
   const offset = e ? Math.max(0, e.start - Math.round(W * 0.7)) : 0
   // default step: h steps before the episode starts, i.e. when an h-ahead alert should already be raised
   const at = pos ?? (e ? Math.max(offset, e.start - Number(h)) : 0)
@@ -53,7 +54,8 @@ function Replay({ dataset, opts }: { dataset: string; opts: any }) {
   }, [dataset, cond, offset, W, h, mode, at, e])
 
   if (err) return <div className="panel error">{err}</div>
-  if (!e) return <div className="panel">Loading test-period episodes…</div>
+  if (eps === null) return <div className="panel">Loading test-period episodes…</div>
+  if (!e) return <div className="panel">The test period never rises above Normal, so there is no episode to replay. Switch to "What-if input" above.</div>
   const th = r?.thresholds ?? opts.thresholds
   const cur = r ? r.at - r.offset : 0
   return (
@@ -61,7 +63,7 @@ function Replay({ dataset, opts }: { dataset: string; opts: any }) {
       <div className="panel">
         <span className="demo-tag replay">HISTORICAL REPLAY · held-out test period · real recorded data</span>
         <div className="controls" style={{ marginTop: 10 }}>
-          <label className="ctl">High-water episode (test period, largest first)
+          <label className="ctl">{epClass === 'High' ? 'High-water episode' : `${epClass}-level episode (no High level in this test period)`} (test period, largest first)
             <select value={ep} onChange={(x) => setEp(Number(x.target.value))} style={{ marginLeft: 0 }}>
               {eps.map((x, i) => <option key={i} value={i}>{x.timestamp} · peak {fmt(x.peak_level, 2)} m ({x.peak_class})</option>)}
             </select>
@@ -149,7 +151,7 @@ function WhatIf({ dataset, opts }: { dataset: string; opts: any }) {
           <div>
             {field('level', 'Water level', 'm', 0, Number(lvlMax.toFixed(2)), 0.01)}
             {field('rise', 'Rate of rise', 'm/h', Math.max(opts.bounds.rise[0], -0.5), Math.min(opts.bounds.rise[1], 1.5), 0.005)}
-            {field('rain', `Rainfall, last ${opts.rain_window_hours} h`, '(gauge units)', 0, Number((opts.anchors.rain[2] * 2).toFixed(0)), 0.1)}
+            {field('rain', `Rainfall, last ${opts.rain_window_hours} h`, opts.units.rain.includes('(mm') ? '(mm)' : '(gauge units)', 0, Number((opts.anchors.rain[2] * 2).toFixed(0)), 0.1)}
           </div>
           <div className="controls" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
             <Controls horizons={opts.horizons} h={h} setH={setH} mode={mode} setMode={setMode} unsupported={opts.unsupported_horizons} />

@@ -248,11 +248,15 @@ def scenarios():
 
 @app.get("/api/episodes/{ds_id}")
 def episodes(ds_id: str, limit: int = 40):
-    """High-water episodes in the held-out test period (runs of observed level >= the High threshold)."""
+    """High-water episodes in the held-out test period (runs of observed level >= the High threshold).
+    When the test period never reaches High, the highest level that does occur is used instead and reported."""
     _spec(ds_id)
     pipe, test = _pipeline(ds_id)
     cls = np.digitize(test["level"].to_numpy(float), pipe.cal.thresholds)
-    hi = cls >= config.ALERT_CLASS
+    min_class = min(config.ALERT_CLASS, int(cls.max()))
+    if min_class == 0:
+        return {"episodes": [], "total": 0, "episode_class": None}
+    hi = cls >= min_class
     starts = np.flatnonzero(hi & ~np.r_[False, hi[:-1]])
     out = []
     for s0 in starts:
@@ -264,7 +268,7 @@ def episodes(ds_id: str, limit: int = 40):
                     "peak_level": float(seg.max()), "peak_class": config.RISK_CLASSES[int(cls[s0:e + 1].max())],
                     "steps": int(e - s0 + 1)})
     out.sort(key=lambda r: -r["peak_level"])
-    return {"episodes": out[:limit], "total": len(out)}
+    return {"episodes": out[:limit], "total": len(out), "episode_class": config.RISK_CLASSES[min_class]}
 
 
 @app.get("/api/replay/{ds_id}")
@@ -332,7 +336,7 @@ class AssessRequest(BaseModel):
 
 @app.get("/api/assess/{ds_id}/options")
 def assess_options(ds_id: str):
-    _spec(ds_id)
+    spec = _spec(ds_id)
     suite = _suite(ds_id)
     cal = suite.pipe.cal
     win = cal.cfg.rain_window_steps * cal.cfg.step_hours
@@ -342,9 +346,9 @@ def assess_options(ds_id: str):
             "default_horizon": min(suite.horizons), "anchors": cal.anchors, "thresholds": cal.thresholds,
             "bounds": {"level": list(cal.cfg.level_bounds), "rise": list(cal.bounds["rise"]),
                        "rain": [0.0, cal.bounds["rain"][1]]},
-            "rain_window_hours": win, "risk_classes": config.RISK_CLASSES,
+            "rain_window_hours": win, "step_hours": cal.cfg.step_hours, "risk_classes": config.RISK_CLASSES,
             "units": {"level": "m", "rise": "m/h",
-                      "rain": f"accumulated over the last {win:g} h (gauge units; unit not documented in the source)"}}
+                      "rain": f"accumulated over the last {win:g} h ({spec.rain_unit})"}}
 
 
 @app.post("/api/assess/{ds_id}")

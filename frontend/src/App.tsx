@@ -28,7 +28,7 @@ function ImportPanel({ dataset, onDone }: { dataset: string; onDone: () => void 
   }, [job, dataset, onDone])
   return (
     <div className="panel">
-      <p>This dataset has not been imported yet. Importing downloads the original file from the authors' repository, checks its SHA-256 and builds the processed series.</p>
+      <p>This dataset has not been imported yet. Importing downloads the original file(s) from the source listed in the dataset documentation, checks the SHA-256 and builds the processed series.</p>
       <button disabled={job?.state === 'running'} onClick={() => api(`/datasets/${dataset}/import`, { method: 'POST' }).then(setJob).catch((e) => setJob({ state: 'failed', message: e.message }))}>
         {job?.state === 'running' ? `Importing… ${job.message ?? ''}` : 'Import dataset'}</button>
       {job?.state === 'failed' && <div className="error" style={{ marginTop: 8 }}>{job.message}{job.manual && <pre>{job.manual}</pre>}</div>}
@@ -74,6 +74,7 @@ export default function App() {
             <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
               <option value="bengalas">Bengalas River, Brazil · 30 min</option>
               <option value="malwathu">Malwathu Oya, Sri Lanka · daily</option>
+              <option value="cwc_chindnar">Indravati at Chindnar, India (CWC) · hourly</option>
             </select>
           </label>
         </div>

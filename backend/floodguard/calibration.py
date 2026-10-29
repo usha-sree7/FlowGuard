@@ -31,6 +31,8 @@ DEFAULT_RUN = {
     "bengalas": dict(step_hours=0.5, horizon_steps=2, rain_window_steps=4),
     # 1 day ahead, 2 day rain accumulation for the daily river series
     "malwathu": dict(step_hours=24.0, horizon_steps=1, rain_window_steps=2),
+    # 1 h ahead, 24 h rain accumulation for the large Indravati river (slow response; chosen a priori, not tuned)
+    "cwc_chindnar": dict(step_hours=1.0, horizon_steps=1, rain_window_steps=24),
 }
 
 

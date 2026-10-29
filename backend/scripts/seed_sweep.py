@@ -17,7 +17,7 @@ from floodguard.experiment import run_experiment  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset", choices=["bengalas", "malwathu"])
+    ap.add_argument("dataset", choices=["bengalas", "malwathu", "cwc_chindnar"])
     ap.add_argument("--seeds", type=int, default=5)
     a = ap.parse_args()
     rows = []

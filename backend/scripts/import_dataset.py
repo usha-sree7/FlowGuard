@@ -16,7 +16,7 @@ from floodguard.datasets import DatasetError, import_dataset  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset", choices=["bengalas", "malwathu"])
+    ap.add_argument("dataset", choices=["bengalas", "malwathu", "cwc_chindnar"])
     ap.add_argument("--no-download", action="store_true")
     a = ap.parse_args()
     try:

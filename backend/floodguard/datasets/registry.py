@@ -34,6 +34,7 @@ class DatasetSpec:
     limitations: tuple[str, ...]
     unverified: tuple[str, ...] = field(default_factory=tuple)
     level_bounds_m: tuple[float, float] = (0.0, 10.0)
+    rain_unit: str = "gauge units; unit not documented in the source"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -152,7 +153,76 @@ MALWATHU = DatasetSpec(
     level_bounds_m=(0.0, 15.0),
 )
 
-DATASETS: dict[str, DatasetSpec] = {d.id: d for d in (BENGALAS, MALWATHU)}
+NWDP_LEVEL_DS = "https://nwdp.nwic.gov.in/dataset/68600163-c5a0-4327-aa1a-fa7157b86cce"
+NWDP_RAIN_DS = "https://nwdp.nwic.gov.in/dataset/792f0818-bedf-42ab-a119-dc7002ceb312"
+
+# Checked on 2026-10-29 (see docs/INDIAN_DATA_AUDIT.md). Of the 66 Godavari-basin telemetry level stations, Chindnar was
+# chosen because it has a rain gauge at the same coordinates, natural (unregulated) monsoon rises and few stuck values.
+CWC_CHINDNAR = DatasetSpec(
+    id="cwc_chindnar",
+    name="Indravati River at Chindnar (Chhattisgarh, India) - CWC telemetry",
+    paper_title="River Water Level (Telemetry - Hourly) and Rainfall (Telemetry - Hourly), Central Water Commission",
+    paper_ref="Central Water Commission (CWC), published by the National Water Informatics Centre on the National "
+    "Water Data Portal (NWDP), Ministry of Jal Shakti, Government of India",
+    doi="",
+    repo="https://nwdp.nwic.gov.in/en/dataset/river-water-level-telemetry-hourly-central-water-commission-cwc",
+    repo_commit="files downloaded 2026-10-29 (NWDP 'Last Update' 2026-10-29)",
+    licence="Not stated on the dataset pages (portal footer: (c) NWIC, All Rights Reserved; National Water Data "
+    "Policy applies). Raw files are NOT redistributed with this project; the importer downloads them from NWDP.",
+    location="CWC telemetry station Chindnar, Indravati River (Godavari basin), Dantewada district, Chhattisgarh, "
+    "India; lat 19.0831, lon 81.3000; gauge zero RL 327.15 m. Rain gauge at the same coordinates.",
+    period_claimed="Resource '2021-2025'. Chindnar level 2021-01-01 to 2025-05-17 (see quality report)",
+    resolution="hourly telemetry with gaps; off-hour readings (mostly hh:30) are moved to the next full hour",
+    step_hours=1.0,
+    files=(
+        RemoteFile(
+            name="rwl_tel_hr_cwc_006_2021_2025.csv",
+            url=f"{NWDP_LEVEL_DS}/resource/4d139325-8371-422f-acef-d34ccec4300e/download/rwl_tel_hr_cwc_006_2021_2025.csv",
+            sha256="675a55fc63aab786486ec9faaa7ef8073805ce986815d61c319f545965a0313a",
+            size=185715692,
+        ),
+        RemoteFile(
+            name="rainfall_tel_hr_cwc_cg_2021_2025.csv",
+            url=f"{NWDP_RAIN_DS}/resource/8984d2b2-1275-4443-9bb6-087cf539fafb/download/rainfall_tel_hr_cwc_cg_2021_2025.csv",
+            sha256="6338787c5beb798e10e8da43cdc3e684ee572a46dff590a0c85991e6a4fcf931",
+            size=5850926,
+        ),
+    ),
+    column_mapping={
+        "source_files": "rwl_tel_hr_cwc_006_2021_2025.csv (Godavari basin, all 66 stations) and "
+        "rainfall_tel_hr_cwc_cg_2021_2025.csv (Chhattisgarh, all stations); rows with Station == 'Chindnar' used",
+        "Data Acquisition Time": "timestamp, format DD-MM-YYYY HH:MM (timezone not stated; assumed IST)",
+        "River Water Level Telemetry Hourly (meter)": "level [m above mean sea level; gauge zero RL 327.15 m]",
+        "Telemetry Hourly Rainfall (mm)": "rain__gauge [mm per hour]. The file holds ONLY non-zero records "
+        "(minimum 0.1 mm). An hour with a level reading but no rain record is set to 0 mm (assumption).",
+    },
+    rain_sensors=("gauge",),
+    label_info={
+        "true_flood_labels": False,
+        "kind": "proxy",
+        "description": "No flood events or official warning / danger levels are included in the NWDP files. The same "
+        "PROXY rule as for Bengalas is used: train-split mean + k*sd of the level (k = 0.5, 1, 2, 3); Alert = level "
+        "above mean + 2 sd. This is a statistical exceedance, not an observed flood and not a CWC warning level.",
+    },
+    limitations=(
+        "Proxy labels only; CWC warning / danger levels for Chindnar were not available in the downloaded files.",
+        "Rain file contains non-zero records only, so a missing rain hour cannot be told apart from a dry hour.",
+        "Single point rain gauge for a large basin: local rain explains little of the level change "
+        "(correlation of past-24 h rain with next-24 h rise about 0.08).",
+        "Many gaps; 1 h and 3 h horizons only (30 min is not representable).",
+        "Level values outside 327.15-350 m and rain above 100 mm/h are removed as implausible (counts in the "
+        "quality report).",
+    ),
+    unverified=(
+        "Units: the column names say metre and mm; no separate data dictionary was found.",
+        "Timezone of 'Data Acquisition Time'.",
+        "Licence / reuse terms for the NWDP files.",
+    ),
+    level_bounds_m=(327.15, 350.0),
+    rain_unit="mm (from the column name 'Telemetry Hourly Rainfall (mm)')",
+)
+
+DATASETS: dict[str, DatasetSpec] = {d.id: d for d in (BENGALAS, MALWATHU, CWC_CHINDNAR)}
 
 # Candidates audited but NOT integrated (see docs/PAPER_DATASET_AUDIT.md).
 NOT_INTEGRATED = [

@@ -36,7 +36,8 @@ def main() -> None:
     shutil.copytree(TEMPLATE, BUILD, dirs_exist_ok=True)
     shutil.copytree(ROOT / "backend" / "floodguard", BUILD / "floodguard",
                     ignore=shutil.ignore_patterns("__pycache__"))
-    shutil.copytree(processed, BUILD / "bundle" / "data" / "processed")
+    # NWDP (CWC India) files carry no open licence, so data derived from them is not published on the hosted demo.
+    shutil.copytree(processed, BUILD / "bundle" / "data" / "processed", ignore=shutil.ignore_patterns("cwc_*"))
     for run in sorted((ROOT / "results" / "runs").glob("*")):
         out = BUILD / "bundle" / "results" / "runs" / run.name
         out.mkdir(parents=True)

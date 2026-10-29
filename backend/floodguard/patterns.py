@@ -31,7 +31,7 @@ COST = np.array([[(p - t) if p >= t else 2 * (t - p) for p in range(N_CLASSES)] 
 def _fitness(labels, cls) -> float:
     """Model-selection fitness on the validation block: alert F1 + 0.25 x 5-class macro F1."""
     ev = evaluate(labels, cls)
-    return ev["binary_alert"]["f1"] + 0.25 * np.nan_to_num(ev["ordinal"]["macro_f1"])
+    return np.nan_to_num(ev["binary_alert"]["f1"]) + 0.25 * np.nan_to_num(ev["ordinal"]["macro_f1"])
 
 
 # ---------------------------------------------------------------- SOM
