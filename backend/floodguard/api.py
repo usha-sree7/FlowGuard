@@ -69,7 +69,8 @@ def _num(a):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "model_version": MODEL_VERSION, "read_only": config.READ_ONLY}
+    return {"ok": True, "model_version": MODEL_VERSION, "read_only": config.READ_ONLY,
+            "lab_max_upload_mb": round(lab.MAX_UPLOAD_BYTES / 1e6, 1)}
 
 
 @app.get("/api/datasets")
@@ -381,66 +382,47 @@ def assess(ds_id: str, req: AssessRequest):
 
 
 # --------------------------------------------------------------------------- dataset lab (upload your own CSV)
-# Uploads are kept in server memory only (floodguard/datasets/custom.py); never written to data/raw,
-# data/processed or results/, so they cannot overwrite or be confused with the three curated datasets above.
-# Only the primary model (IT2FIS, reliability-fused) is fitted and run -- see custom.py's module docstring.
+# Stateless by design (see custom.py's module docstring): every request carries the CSV content it needs,
+# nothing is cached server-side between calls. This is required for correctness on Vercel's serverless
+# architecture, not an optimisation. Lab never writes to data/raw, data/processed or results/, so it cannot
+# overwrite or be confused with the three curated datasets above or their results -- that is why these
+# routes do not call _writable() and are available even when the hosted demo is otherwise read-only.
 
-class LabMapping(BaseModel):
+class LabMapRequest(BaseModel):
+    csv_text: str
     timestamp: str | None = None
     level: str
     rain: list[str]
     step_hours: float | None = None
 
 
-class LabAnalyzeRequest(BaseModel):
+class LabAnalyzeRequest(LabMapRequest):
+    filename: str = "upload.csv"
     horizon_steps: int | None = None
 
 
 @app.post("/api/lab/upload")
 async def lab_upload(file: UploadFile = File(...)):
-    _writable()
     data = await file.read()
     try:
-        upload_id, info = lab.new_upload(file.filename or "upload.csv", data)
-    except lab.LabError as e:
-        raise HTTPException(422, str(e))
-    return info
-
-
-@app.get("/api/lab/{upload_id}")
-def lab_state(upload_id: str):
-    try:
-        return lab.get_state(upload_id)
-    except lab.LabNotFound as e:
-        raise HTTPException(404, str(e))
-
-
-@app.get("/api/lab/{upload_id}/preview")
-def lab_preview(upload_id: str):
-    try:
-        return lab.preview(upload_id)
-    except lab.LabNotFound as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/lab/{upload_id}/map")
-def lab_map(upload_id: str, mapping: LabMapping):
-    _writable()
-    try:
-        return lab.set_mapping(upload_id, mapping.timestamp, mapping.level, mapping.rain, mapping.step_hours)
-    except lab.LabNotFound as e:
-        raise HTTPException(404, str(e))
+        return lab.preview_from_bytes(file.filename or "upload.csv", data)
     except lab.LabError as e:
         raise HTTPException(422, str(e))
 
 
-@app.post("/api/lab/{upload_id}/analyze")
-def lab_analyze(upload_id: str, req: LabAnalyzeRequest):
-    _writable()
+@app.post("/api/lab/map")
+def lab_map(req: LabMapRequest):
     try:
-        return lab.analyze(upload_id, req.horizon_steps)
-    except lab.LabNotFound as e:
-        raise HTTPException(404, str(e))
+        return lab.validate_mapping(req.csv_text, req.timestamp, req.level, req.rain, req.step_hours)
+    except lab.LabError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/lab/analyze")
+def lab_analyze(req: LabAnalyzeRequest):
+    try:
+        return lab.analyze(req.csv_text, req.filename, req.timestamp, req.level, req.rain,
+                           req.step_hours, req.horizon_steps)
     except lab.LabError as e:
         raise HTTPException(422, str(e))
 

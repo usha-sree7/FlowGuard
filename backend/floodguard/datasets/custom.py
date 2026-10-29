@@ -4,6 +4,20 @@ code as the three curated datasets (`calibration.py`, `systems.Pipeline`, `metri
 re-implements model maths; it only adapts an unknown CSV into the standard schema those modules expect
 (`t_hours`, `timestamp`, `level`, `rain__<sensor>`, `step_ok`, `rise_rate`) and calls them.
 
+STATELESS BY DESIGN. Every function here takes the CSV content as an explicit argument and returns its
+result; nothing is cached or stored server-side between calls. This is required, not a style choice: the
+hosted demo runs on Vercel Functions, which (like any Lambda-based serverless platform) do not guarantee
+that two separate HTTP requests land on the same process, so a module-level "remember the last upload"
+dict (the previous design) could intermittently 404 a user's own upload between the preview, mapping and
+analysis steps. Nothing here ever touches disk either way (data/raw, data/processed, results/ are never
+written to), so none of this can overwrite or be confused with the curated datasets, independent of the
+read-only flag -- that is why Dataset Lab's endpoints do not call `_writable()`.
+
+Vercel also hard-caps a function's request AND response body at 4.5 MB (undocumented in the project
+README; confirmed against Vercel's own Functions limits page). `MAX_UPLOAD_BYTES` is sized well under
+that for the hosted demo so the CSV content can safely round-trip through the mapping/analysis requests
+as plain text; a larger limit is used for local development, which has no such constraint.
+
 Scope, by design (student project, limited time before review):
   - CSV only (no Excel): kept out to avoid shipping an unreliable parser under time pressure.
   - Only the PRIMARY model (IT2FIS, reliability-fused) is fitted and run. PSO-tuned IT2FIS, SOM and ANFIS all
@@ -11,8 +25,6 @@ Scope, by design (student project, limited time before review):
     running all four for an ad-hoc upload inside one HTTP request is not attempted here. The offline
     `scripts/import_dataset.py` + `scripts/compare_models.py` workflow remains the way to get the full
     4-model comparison, after a dataset is reviewed and added to `datasets/registry.py`.
-  - Uploads live in server memory only (this process, until restart or eviction). They are never written to
-    data/raw, data/processed or results/, so they cannot overwrite or be confused with the curated datasets.
   - Classification metrics (precision/recall/F1) are only ever computed from the PROXY label rule already
     used for the curated datasets (future observed level vs. train-split thresholds) -- never invented, and
     reported as undefined (None) exactly like the existing datasets when the test split has no alert.
@@ -21,8 +33,6 @@ from __future__ import annotations
 
 import io
 import re
-import time
-import uuid
 from types import SimpleNamespace
 
 import numpy as np
@@ -35,39 +45,20 @@ from ..suite import horizons as candidate_horizons
 from ..systems import Pipeline, proxy_labels
 from . import loaders
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024   # 20 MB
+# 3 MB keeps a round-tripped CSV (content sent back to the client, then resent on /map and /analyze as
+# plain JSON text) safely under Vercel's 4.5 MB request/response body limit even after JSON-string
+# escaping overhead. Local development (long-lived uvicorn process, no such platform limit) gets a much
+# larger allowance.
+MAX_UPLOAD_BYTES = 3 * 1024 * 1024 if config.READ_ONLY else 20 * 1024 * 1024
 MAX_ROWS = 300_000
 MAX_COLS = 300
 MIN_ROWS_FOR_MAPPING = 60             # need at least this many rows before mapping can be validated
 MIN_TRAIN_ROWS, MIN_TEST_ROWS = 40, 20
 MIN_WET_ROWS, MIN_RISE_ROWS = 20, 20  # minimum usable points to calibrate rain / rise membership functions
-UPLOAD_TTL_S = 6 * 3600                # in-memory uploads older than this are evicted on next access
 
 
 class LabError(RuntimeError):
     pass
-
-
-class LabNotFound(LabError):
-    pass
-
-
-_UPLOADS: dict[str, dict] = {}
-
-
-def _evict_old() -> None:
-    now = time.time()
-    dead = [k for k, v in _UPLOADS.items() if now - v["created_ts"] > UPLOAD_TTL_S]
-    for k in dead:
-        _UPLOADS.pop(k, None)
-
-
-def _get(upload_id: str) -> dict:
-    _evict_old()
-    u = _UPLOADS.get(upload_id)
-    if u is None:
-        raise LabNotFound("Upload not found (it may have expired; uploads are kept in server memory only).")
-    return u
 
 
 def _clean(o):
@@ -92,20 +83,17 @@ def _safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._ -]", "_", name)[:120] or "upload.csv"
 
 
-# --------------------------------------------------------------------------- upload + raw preview
-
-def new_upload(filename: str, data: bytes) -> tuple[str, dict]:
-    _evict_old()
-    safe = _safe_name(filename)
-    if not safe.lower().endswith(".csv"):
-        raise LabError(f"Only .csv files are supported in this version ('{safe}' was not recognised as CSV). "
-                        "Export your spreadsheet as CSV and try again.")
-    if len(data) == 0:
+def _text_to_df(csv_text: str) -> pd.DataFrame:
+    """Shared, defensive CSV parse + size/shape guard. Every entry point (upload, map, analyze) calls this
+    independently -- none of them trusts a size/row check that supposedly already happened in an earlier,
+    separate request, because on a stateless/serverless backend there is no such thing as "earlier"."""
+    size = len(csv_text.encode("utf-8"))
+    if size == 0:
         raise LabError("The uploaded file is empty.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise LabError(f"File is {len(data) / 1e6:.1f} MB; the limit for this demo is {MAX_UPLOAD_BYTES / 1e6:.0f} MB.")
+    if size > MAX_UPLOAD_BYTES:
+        raise LabError(f"File is {size / 1e6:.1f} MB; the limit on this server is {MAX_UPLOAD_BYTES / 1e6:.1f} MB.")
     try:
-        df = pd.read_csv(io.BytesIO(data), low_memory=False)
+        df = pd.read_csv(io.StringIO(csv_text), low_memory=False)
     except Exception as exc:  # malformed file: never execute it, never leak a path, just report it failed
         raise LabError(f"Could not read this file as CSV ({type(exc).__name__}). "
                         "Check that it is a plain comma-separated file with a header row.") from exc
@@ -114,14 +102,26 @@ def new_upload(filename: str, data: bytes) -> tuple[str, dict]:
     if df.shape[1] > MAX_COLS:
         raise LabError(f"{df.shape[1]} columns found; the limit is {MAX_COLS}.")
     if df.shape[0] > MAX_ROWS:
-        raise LabError(f"{df.shape[0]:,} rows found; the limit for this demo is {MAX_ROWS:,}. "
+        raise LabError(f"{df.shape[0]:,} rows found; the limit is {MAX_ROWS:,}. "
                         "Trim the file and re-upload rather than uploading a sample (so nothing is silently dropped).")
     df.columns = [str(c) for c in df.columns]
+    return df
 
-    upload_id = uuid.uuid4().hex[:16]
-    _UPLOADS[upload_id] = {"filename": safe, "raw": df, "created_ts": time.time(),
-                           "mapping": None, "std_df": None, "cfg_info": None, "quality": None}
-    return upload_id, preview(upload_id)
+
+# --------------------------------------------------------------------------- upload + raw preview
+
+def preview_from_bytes(filename: str, data: bytes) -> dict:
+    """Validate + preview an uploaded file. Returns the decoded `csv_text` so the caller (the frontend) can
+    resend it on /map and /analyze -- this function stores nothing server-side."""
+    safe = _safe_name(filename)
+    if not safe.lower().endswith(".csv"):
+        raise LabError(f"Only .csv files are supported in this version ('{safe}' was not recognised as CSV). "
+                        "Export your spreadsheet as CSV and try again.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise LabError(f"File is {len(data) / 1e6:.1f} MB; the limit on this server is {MAX_UPLOAD_BYTES / 1e6:.1f} MB.")
+    csv_text = data.decode("utf-8", errors="replace")
+    df = _text_to_df(csv_text)
+    return {"filename": safe, "csv_text": csv_text, **_preview_fields(df)}
 
 
 def _column_profile(s: pd.Series) -> dict:
@@ -135,9 +135,7 @@ def _column_profile(s: pd.Series) -> dict:
             "sample": [None if pd.isna(v) else str(v)[:60] for v in s.head(3).tolist()]}
 
 
-def preview(upload_id: str) -> dict:
-    u = _get(upload_id)
-    df = u["raw"]
+def _preview_fields(df: pd.DataFrame) -> dict:
     profiles = {c: _column_profile(df[c]) for c in df.columns}
     n = len(df)
     duplicate_rows = int(df.duplicated().sum())
@@ -159,9 +157,8 @@ def preview(upload_id: str) -> dict:
                  "level": level_cands[0] if level_cands else None,
                  "rain": rain_cands[:3]}
 
-    return {"upload_id": upload_id, "filename": u["filename"], "rows": n, "columns": list(df.columns),
-            "column_profiles": _clean(profiles), "duplicate_rows": duplicate_rows, "sample_rows": rows,
-            "suggested_mapping": suggested,
+    return {"rows": n, "columns": list(df.columns), "column_profiles": _clean(profiles),
+            "duplicate_rows": duplicate_rows, "sample_rows": rows, "suggested_mapping": suggested,
             "note": "This is a RAW preview of the file as uploaded. Nothing has been validated, cleaned or "
                     "analysed yet -- confirm or correct the suggested column mapping below, then validate.",
             "min_rows_required": MIN_ROWS_FOR_MAPPING, "enough_rows": n >= MIN_ROWS_FOR_MAPPING}
@@ -169,10 +166,11 @@ def preview(upload_id: str) -> dict:
 
 # --------------------------------------------------------------------------- column mapping + validation
 
-def set_mapping(upload_id: str, timestamp: str | None, level: str, rain: list[str],
-                step_hours: float | None) -> dict:
-    u = _get(upload_id)
-    raw = u["raw"]
+def _build_standard(raw: pd.DataFrame, timestamp: str | None, level: str, rain: list[str],
+                    step_hours: float | None) -> dict:
+    """Pure function: raw DataFrame + mapping in, {errors/warnings/quality/std_df/cfg_info} out. Called by
+    both `validate_mapping` (client-facing preview of the result) and `analyze` (which needs the same
+    standardised frame to run the model on) -- each call re-derives everything from scratch, by design."""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -193,7 +191,7 @@ def set_mapping(upload_id: str, timestamp: str | None, level: str, rain: list[st
         errors.append(f"Only {len(raw)} rows in the file; at least {MIN_ROWS_FOR_MAPPING} are needed to "
                        "calibrate anything meaningfully.")
     if errors:
-        return {"ready": False, "errors": errors, "warnings": warnings}
+        return {"ready": False, "errors": errors, "warnings": warnings, "std_df": None, "cfg_info": None}
 
     n0 = len(raw)
     level_num = pd.to_numeric(raw[level], errors="coerce")
@@ -217,7 +215,7 @@ def set_mapping(upload_id: str, timestamp: str | None, level: str, rain: list[st
         bad = ts.isna()
         dropped_unparseable_timestamps = int(bad.sum())
         if dropped_unparseable_timestamps > 0.2 * n0:
-            return {"ready": False, "warnings": warnings, "errors": [
+            return {"ready": False, "warnings": warnings, "std_df": None, "cfg_info": None, "errors": [
                 f"{dropped_unparseable_timestamps} of {n0} values in '{timestamp}' could not be parsed as a "
                 "date/time (more than 20%). Check the column mapping or the date format in the file."]}
         if dropped_unparseable_timestamps:
@@ -266,8 +264,8 @@ def set_mapping(upload_id: str, timestamp: str | None, level: str, rain: list[st
     margin = max(0.5, 0.2 * (hi - lo))
     level_bounds = (round(lo - margin, 3), round(hi + margin, 3))
 
-    fake_spec = SimpleNamespace(id=f"upload:{upload_id}", step_hours=step_hours_final, level_bounds_m=level_bounds)
-    info = {"original_filename": u["filename"], "column_mapping": {"timestamp": timestamp, "level": level, "rain": rain},
+    fake_spec = SimpleNamespace(id="upload", step_hours=step_hours_final, level_bounds_m=level_bounds)
+    info = {"column_mapping": {"timestamp": timestamp, "level": level, "rain": rain},
             "level_missing_in_source_file": level_missing_original, "level_non_numeric_values": level_non_numeric,
             "rain_columns": rain_report, "dropped_unparseable_timestamps": dropped_unparseable_timestamps,
             "dropped_duplicate_timestamps": dropped_duplicate_timestamps, "rows_reordered_to_be_chronological": reordered,
@@ -292,31 +290,41 @@ def set_mapping(upload_id: str, timestamp: str | None, level: str, rain: list[st
     if not sup["supported"]:
         errors.append(f"No usable forecast horizon at a {step_hours_final:g} h sampling interval "
                        "(need a whole number of steps at 30 min, 1 h or 3 h).")
-        return {"ready": False, "errors": errors, "warnings": warnings, "quality": _clean(quality)}
+        return {"ready": False, "errors": errors, "warnings": warnings, "quality": quality, "std_df": None, "cfg_info": None}
 
-    u.update(mapping={"timestamp": timestamp, "level": level, "rain": rain, "step_hours": step_hours_final},
-             std_df=std,
-             cfg_info={"step_hours": step_hours_final, "rain_sensors": tuple(rain), "level_bounds": level_bounds,
-                       "rain_window_steps": max(1, round(2.0 / step_hours_final)),
-                       "horizons": sup["supported"], "unsupported_horizons": sup["unsupported"]},
-             quality=quality)
-    return {"ready": True, "errors": [], "warnings": warnings, "quality": _clean(quality),
-            "horizons": {str(k): v for k, v in sup["supported"].items()}, "unsupported_horizons": sup["unsupported"],
-            "rows": len(std)}
+    cfg_info = {"step_hours": step_hours_final, "rain_sensors": tuple(rain), "level_bounds": level_bounds,
+                "rain_window_steps": max(1, round(2.0 / step_hours_final)),
+                "horizons": sup["supported"], "unsupported_horizons": sup["unsupported"]}
+    return {"ready": True, "errors": [], "warnings": warnings, "quality": quality, "std_df": std, "cfg_info": cfg_info}
+
+
+def validate_mapping(csv_text: str, timestamp: str | None, level: str, rain: list[str],
+                     step_hours: float | None) -> dict:
+    """Client-facing preview of `_build_standard`'s result (no model run yet)."""
+    raw = _text_to_df(csv_text)
+    r = _build_standard(raw, timestamp, level, rain, step_hours)
+    out = {"ready": r["ready"], "errors": r["errors"], "warnings": r["warnings"]}
+    if r.get("quality") is not None:
+        out["quality"] = _clean(r["quality"])
+    if r["ready"]:
+        sup = r["cfg_info"]["horizons"]
+        out.update(horizons={str(k): v for k, v in sup.items()},
+                   unsupported_horizons=r["cfg_info"]["unsupported_horizons"], rows=len(r["std_df"]))
+    return out
 
 
 # --------------------------------------------------------------------------- analysis (primary model only)
 
-def analyze(upload_id: str, horizon_steps: int | None) -> dict:
-    u = _get(upload_id)
-    if u["std_df"] is None:
-        raise LabError("Map and validate the columns (POST /api/lab/{upload_id}/map) before running analysis.")
-    df, cfg_info = u["std_df"], u["cfg_info"]
+def analyze(csv_text: str, filename: str, timestamp: str | None, level: str, rain: list[str],
+           step_hours: float | None, horizon_steps: int | None) -> dict:
+    raw = _text_to_df(csv_text)
+    r = _build_standard(raw, timestamp, level, rain, step_hours)
+    if not r["ready"]:
+        raise LabError("; ".join(r["errors"]) or "This CSV and column mapping did not validate.")
+    df, cfg_info = r["std_df"], r["cfg_info"]
     sup = cfg_info["horizons"]
-    if not sup:
-        raise LabError("No supported forecast horizon for this dataset's sampling interval.")
     h = horizon_steps if horizon_steps in sup else min(sup)
-    cfg = RunConfig(dataset=f"upload:{upload_id}", step_hours=cfg_info["step_hours"], horizon_steps=h,
+    cfg = RunConfig(dataset="upload", step_hours=cfg_info["step_hours"], horizon_steps=h,
                     rain_window_steps=cfg_info["rain_window_steps"], rain_sensors=cfg_info["rain_sensors"],
                     level_bounds=cfg_info["level_bounds"], train_fraction=config.TRAIN_FRACTION)
     train, test = split(df, cfg.train_fraction)
@@ -373,7 +381,7 @@ def analyze(upload_id: str, horizon_steps: int | None) -> dict:
     ts_all = _clean(df["timestamp"].where(df["timestamp"] != "", None).tolist())
 
     return {
-        "upload_id": upload_id, "filename": u["filename"],
+        "filename": filename,
         "primary_model": "it2_fis", "primary_mode": "fused",
         "models_evaluated": ["IT2FIS (primary, reliability-fused)"],
         "models_not_run": ["PSO-tuned IT2FIS", "SOM", "ANFIS"],
@@ -412,9 +420,3 @@ def analyze(upload_id: str, horizon_steps: int | None) -> dict:
                        "official flood warning. Labels are proxy labels (future level vs. statistical thresholds "
                        "from this upload's own training split), not observed flood events.",
     }
-
-
-def get_state(upload_id: str) -> dict:
-    u = _get(upload_id)
-    return {"upload_id": upload_id, "filename": u["filename"], "mapping": u["mapping"],
-            "ready": u["std_df"] is not None, "quality": _clean(u["quality"]) if u["quality"] else None}

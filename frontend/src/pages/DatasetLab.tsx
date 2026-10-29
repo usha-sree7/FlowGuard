@@ -13,8 +13,9 @@ async function upload(file: File): Promise<any> {
 }
 
 type Step = 'upload' | 'map' | 'results'
+type Mapping = { timestamp: string | null; level: string; rain: string[]; step_hours: number | null }
 
-function Mapping({ p, onValidated }: { p: any; onValidated: (r: any) => void }) {
+function MappingForm({ p, onValidated }: { p: any; onValidated: (m: Mapping, r: any) => void }) {
   const [ts, setTs] = useState<string>(p.suggested_mapping.timestamp ?? '')
   const [level, setLevel] = useState<string>(p.suggested_mapping.level ?? '')
   const [rain, setRain] = useState<string[]>(p.suggested_mapping.rain ?? [])
@@ -25,10 +26,9 @@ function Mapping({ p, onValidated }: { p: any; onValidated: (r: any) => void }) 
   const toggleRain = (c: string) => setRain((r) => (r.includes(c) ? r.filter((x) => x !== c) : [...r, c]))
   const validate = () => {
     setBusy(true)
-    api(`/lab/${p.upload_id}/map`, {
-      method: 'POST',
-      body: JSON.stringify({ timestamp: ts || null, level, rain, step_hours: stepHours ? Number(stepHours) : null }),
-    }).then((r) => { setRes(r); setBusy(false); if (r.ready) onValidated(r) })
+    const m: Mapping = { timestamp: ts || null, level, rain, step_hours: stepHours ? Number(stepHours) : null }
+    api('/lab/map', { method: 'POST', body: JSON.stringify({ csv_text: p.csv_text, ...m }) })
+      .then((r) => { setRes(r); setBusy(false); if (r.ready) onValidated(m, r) })
       .catch((e) => { setRes({ ready: false, errors: [e.message], warnings: [] }); setBusy(false) })
   }
 
@@ -89,7 +89,7 @@ function Mapping({ p, onValidated }: { p: any; onValidated: (r: any) => void }) 
   )
 }
 
-function Results({ uploadId, report }: { uploadId: string; report: any }) {
+function Results({ csvText, filename, mapping, report }: { csvText: string; filename: string; mapping: Mapping; report: any }) {
   const [h, setH] = useState(Object.keys(report.horizons)[0] ?? '1')
   const [r, setR] = useState<any>(null)
   const [err, setErr] = useState('')
@@ -98,7 +98,7 @@ function Results({ uploadId, report }: { uploadId: string; report: any }) {
   const run = () => {
     const token = ++latest.current
     setBusy(true); setErr('')
-    api(`/lab/${uploadId}/analyze`, { method: 'POST', body: JSON.stringify({ horizon_steps: Number(h) }) })
+    api('/lab/analyze', { method: 'POST', body: JSON.stringify({ csv_text: csvText, filename, ...mapping, horizon_steps: Number(h) }) })
       .then((x) => { if (latest.current === token) { setR(x); setBusy(false) } })
       .catch((e) => { if (latest.current === token) { setErr(e.message); setBusy(false) } })
   }
@@ -181,14 +181,15 @@ function Results({ uploadId, report }: { uploadId: string; report: any }) {
 }
 
 export default function DatasetLab() {
-  const [readOnly, setReadOnly] = useState<boolean | null>(null)
+  const [maxMb, setMaxMb] = useState<number | null>(null)
   const [step, setStep] = useState<Step>('upload')
   const [preview, setPreview] = useState<any>(null)
+  const [mapping, setMapping] = useState<Mapping | null>(null)
   const [report, setReport] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
-  useEffect(() => { api('/health').then((h) => setReadOnly(!!h.read_only)).catch(() => setReadOnly(false)) }, [])
+  useEffect(() => { api('/health').then((h) => setMaxMb(h.lab_max_upload_mb)).catch(() => setMaxMb(null)) }, [])
 
   const onFile = (f: File | undefined) => {
     if (!f) return
@@ -197,17 +198,7 @@ export default function DatasetLab() {
       .catch((e) => { setErr(e.message); setBusy(false) })
   }
 
-  const reset = () => { setStep('upload'); setPreview(null); setReport(null); setErr('') }
-
-  if (readOnly === null) return <div className="panel">Checking server…</div>
-  if (readOnly) return (
-    <div className="panel callout warn">
-      <b>Dataset Lab is disabled on this hosted demo.</b>
-      <p className="small" style={{ margin: '6px 0 0' }}>Uploading and analysing a dataset needs a writable local server. Run this project locally
-        (<code>python -m uvicorn floodguard.api:app --port 8000</code> from <code>backend/</code>, without <code>FLOODGUARD_READONLY=1</code>) to use it.
-        The Bengalas, Malwathu and Chindnar results elsewhere in this app are unaffected.</p>
-    </div>
-  )
+  const reset = () => { setStep('upload'); setPreview(null); setMapping(null); setReport(null); setErr('') }
 
   return (
     <div className="stack">
@@ -215,9 +206,10 @@ export default function DatasetLab() {
         <h2>Dataset Lab</h2>
         <p className="note">Upload your own river-level + rainfall CSV, map its columns, validate it, and run the primary flood-risk
           model (IT2FIS, reliability-fused) on it — using the same calibration and fuzzy-inference code as the built-in datasets.
-          Uploads are kept in this server's memory only; they never overwrite the Bengalas, Malwathu or Chindnar datasets or their results.</p>
-        <p className="muted small">Workflow: Upload → Preview → Map columns → Validate → Run analysis → View results. CSV only
-          (no size &gt; 20 MB, no more than 300,000 rows). Only IT2FIS runs here — PSO-tuned IT2FIS, SOM and ANFIS need iterative
+          Nothing is written to this server's disk: each request carries its own data and nothing is saved between requests, so an
+          upload can never overwrite the Bengalas, Malwathu or Chindnar datasets or their results.</p>
+        <p className="muted small">Workflow: Upload → Preview → Map columns → Validate → Run analysis → View results. CSV only,
+          up to {maxMb ?? '…'} MB on this server. Only IT2FIS runs here — PSO-tuned IT2FIS, SOM and ANFIS need iterative
           training and are not run for ad-hoc uploads (see the note after analysis).</p>
         <div className="row" style={{ marginTop: 10 }}>
           <label className="big-btn" style={{ cursor: 'pointer' }}>
@@ -230,8 +222,8 @@ export default function DatasetLab() {
         {err && <div className="error" style={{ marginTop: 10 }}>{err}</div>}
       </div>
 
-      {step === 'map' && preview && <Mapping p={preview} onValidated={(r) => { setReport(r); setStep('results') }} />}
-      {step === 'results' && report && <Results uploadId={preview.upload_id} report={report} />}
+      {step === 'map' && preview && <MappingForm p={preview} onValidated={(m, r) => { setMapping(m); setReport(r); setStep('results') }} />}
+      {step === 'results' && report && mapping && <Results csvText={preview.csv_text} filename={preview.filename} mapping={mapping} report={report} />}
     </div>
   )
 }
