@@ -3,44 +3,14 @@ import { fmt, MODEL_COLOR, MODELS, RISK_COLOR } from '../api'
 import { ALERT_LEVELS, MODEL_DOCS, REFERENCE_DOC } from '../content'
 import { clean, defaultHorizon, separated, useComparison, useDatasetSpec } from '../data'
 
-// Processing pipeline: sensors -> (optional) reliability layer -> 3 inputs -> 4 models in parallel -> alert + reasons.
-function Pipeline() {
-  const box = (x: number, y: number, w: number, h: number, t: string, s: string, stroke = 'var(--accent)', dash = false) => (
-    <g>
-      <rect x={x} y={y} width={w} height={h} rx={8} fill="var(--bg)" stroke={stroke} strokeDasharray={dash ? '5 4' : undefined} />
-      <text x={x + 10} y={y + 21} fill="var(--fg)" fontSize={13} fontWeight={600}>{t}</text>
-      <text x={x + 10} y={y + 39} fill="var(--muted)" fontSize={10.5}>{s}</text>
-    </g>
-  )
-  const arrow = (x1: number, y1: number, x2: number, y2: number) => <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--muted)" strokeWidth={1.4} markerEnd="url(#arr)" />
-  const ms = MODEL_DOCS.map((m, i) => ({ ...m, y: 8 + i * 50 }))
-  return (
-    <figure className="chart">
-      <svg viewBox="0 0 760 212" role="img" aria-label="HydroSentinel AI pipeline">
-        <defs>
-          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)" />
-          </marker>
-        </defs>
-        {box(4, 78, 120, 52, 'Sensors', 'level + rain gauges')}
-        {box(150, 78, 130, 52, 'Reliability layer', 'optional: check + fuse', 'var(--risk2)', true)}
-        {box(306, 78, 118, 52, '3 inputs', 'level · rise · rain')}
-        {ms.map((m) => (
-          <g key={m.id}>
-            <rect x={452} y={m.y} width={150} height={40} rx={8} fill="var(--bg)" stroke={MODEL_COLOR[m.id]} strokeWidth={1.6} />
-            <text x={462} y={m.y + 25} fill="var(--fg)" fontSize={13} fontWeight={600}>{m.name}</text>
-            {arrow(424, 104, 450, m.y + 20)}
-            {arrow(602, m.y + 20, 628, 104)}
-          </g>
-        ))}
-        {box(630, 78, 126, 52, 'Alert + reasons', 'Normal … Critical')}
-        {arrow(124, 104, 148, 104)}
-        {arrow(280, 104, 304, 104)}
-      </svg>
-      <figcaption className="muted small">All four models receive identical inputs. The reliability layer (dashed) can be switched on or off on every page to show its effect.</figcaption>
-    </figure>
-  )
-}
+// Plain-language 4-step workflow shown on the home screen. Technical detail (rules, learning, maths) stays in
+// "Technical details" below and in the Assess Risk / Compare Models tabs.
+const WORKFLOW = [
+  { n: 1, title: 'Sensors', text: 'Water level and rainfall readings from the river gauges.' },
+  { n: 2, title: 'Reliability check', text: 'An optional layer flags missing, noisy, spiking or stuck readings and fuses the trustworthy ones.' },
+  { n: 3, title: 'Four techniques', text: 'IT2FIS, PSO-tuned IT2FIS, SOM and ANFIS analyse the same three inputs side by side.' },
+  { n: 4, title: 'Final alert', text: 'One primary alert — IT2FIS on the fused readings — with its reasons and confidence status.' },
+]
 
 export default function Overview({ dataset, go }: { dataset: string; go: (t: string) => void }) {
   const { d, err } = useComparison(dataset)
@@ -77,9 +47,9 @@ export default function Overview({ dataset, go }: { dataset: string; go: (t: str
     <div className="stack">
       <section className="hero">
         <span className="mode-tag">Historical analysis · research prototype · not a live warning service</span>
-        <h2>Four soft-computing techniques for flood-risk alerts, compared on the same river data</h2>
-        <p>HydroSentinel AI reads river water level and rainfall, derives the rate of rise, and lets four techniques (IT2FIS, PSO-tuned IT2FIS,
-          SOM and ANFIS) each issue a five-level flood-risk alert with a reason. It then checks how good and how robust each alert is on a held-out test period.</p>
+        <h2>Flash floods give little warning. HydroSentinel AI turns river sensors into one clear risk alert.</h2>
+        <p>It reads river water level and rainfall, derives the rate of rise, and issues a five-level flood-risk alert with a plain-language
+          reason — then checks, on real held-out river data, how good and how robust that alert is.</p>
         <div className="row">
           <button className="big-btn" onClick={() => go('assess')}>Assess risk →</button>
           <button className="big-btn btn-ghost on-dark" onClick={() => go('compare')}>Compare models</button>
@@ -99,7 +69,25 @@ export default function Overview({ dataset, go }: { dataset: string; go: (t: str
 
       <div className="panel">
         <h2>How it works</h2>
-        <Pipeline />
+        <div className="steps">
+          {WORKFLOW.map((s) => (
+            <div key={s.n} className="step">
+              <span className="n">{s.n}</span>
+              <b>{s.title}</b>
+              <span>{s.text}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel callout">
+        <b>One primary alert, four techniques compared.</b>
+        <p className="small" style={{ margin: '6px 0 10px' }}>
+          The dashboard leads with a single recommended alert — <b>IT2FIS on reliability-fused sensor inputs</b> — shown prominently on
+          Assess Risk with its reasons and a confidence status (Confident / Uncertain / Insufficient data). PSO-tuned IT2FIS, SOM and ANFIS
+          run alongside it and are evaluated as comparison results; they are never averaged or combined into that alert.
+        </p>
+        <button className="big-btn" onClick={() => go('assess')}>See the final alert →</button>
       </div>
 
       <div className="panel">
@@ -118,8 +106,15 @@ export default function Overview({ dataset, go }: { dataset: string; go: (t: str
       </div>
 
       <div className="panel">
-        <h2>The four techniques</h2>
-        <div className="chips" role="tablist">
+        <h2>Key results</h2>
+        {err && <p className="error small">No stored evaluation for this dataset ({err}). Run <code>python scripts/compare_models.py {dataset}</code>.</p>}
+        {d && <ul className="findings">{findings.map((f, i) => <li key={i}>{f}</li>)}</ul>}
+        {d && <p className="muted small">Test period {d.meta.test.first} → {d.meta.test.last} ({d.meta.test.rows.toLocaleString()} steps); models fitted on {d.meta.train.first} → {d.meta.train.last}. Results generated {d.meta.created.replace('T', ' ')}.</p>}
+      </div>
+
+      <details className="panel">
+        <summary>Technical details: how each of the four techniques works</summary>
+        <div className="chips" role="tablist" style={{ marginTop: 10 }}>
           {MODEL_DOCS.map((m) => <button key={m.id} role="tab" aria-selected={open === m.id} className={`chip ${open === m.id ? 'on' : ''}`} onClick={() => setOpen(m.id)}>{m.name}</button>)}
         </div>
         {MODEL_DOCS.filter((m) => m.id === open).map((m) => {
@@ -141,14 +136,7 @@ export default function Overview({ dataset, go }: { dataset: string; go: (t: str
           )
         })}
         <p className="muted small" style={{ marginTop: 8 }}>{REFERENCE_DOC}</p>
-      </div>
-
-      <div className="panel">
-        <h2>Key results</h2>
-        {err && <p className="error small">No stored evaluation for this dataset ({err}). Run <code>python scripts/compare_models.py {dataset}</code>.</p>}
-        {d && <ul>{findings.map((f, i) => <li key={i}>{f}</li>)}</ul>}
-        {d && <p className="muted small">Test period {d.meta.test.first} → {d.meta.test.last} ({d.meta.test.rows.toLocaleString()} steps); models fitted on {d.meta.train.first} → {d.meta.train.last}. Results generated {d.meta.created.replace('T', ' ')}.</p>}
-      </div>
+      </details>
 
       <div className="panel callout warn">
         <b>Read before interpreting any number.</b>

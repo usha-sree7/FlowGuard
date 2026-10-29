@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fmt, ALL_MODELS, RISK, RISK_COLOR, MODEL_COLOR } from '../api'
-import AlertCard, { AlertGrid, LevelChip } from '../Alert'
+import AlertCard, { AlertGrid, FinalAlert, LevelChip } from '../Alert'
 import { LineChart, Strip } from '../charts'
 
 const CONDITIONS: [string, string][] = [['clean', 'Sensors OK'], ['missing_30', 'Missing readings'], ['noise_med', 'Noisy'],
@@ -105,11 +105,13 @@ function Replay({ dataset, opts }: { dataset: string; opts: any }) {
 
       {r && (
         <>
+          <FinalAlert e={r.primary} />
           <div className="panel">
             <div className="row-between">
-              <h3>Alerts issued at {r.timestamp[cur]} for {r.horizon_label} ahead</h3>
+              <h3>Model comparison — alerts issued at {r.timestamp[cur]} for {r.horizon_label} ahead</h3>
               <span className="small">What actually happened: level {fmt(r.outcome.future_level, 2)} m → {r.outcome.proxy_label === null ? 'no reading (gap)' : <LevelChip c={r.outcome.proxy_label} />}</span>
             </div>
+            <p className="muted small">Results from the evaluation study (see Compare Models). Shown for comparison only; they do not change the final alert above.</p>
             <AlertGrid ex={r.explanations} selected={sel} onSelect={setSel} />
           </div>
           <AlertCard e={r.explanations[sel]} />
@@ -166,8 +168,10 @@ function WhatIf({ dataset, opts }: { dataset: string; opts: any }) {
       {err && <div className="panel error">{err}</div>}
       {r && (
         <>
+          <FinalAlert e={r.primary} demo />
           <div className="panel">
-            <h3>Alerts for {r.horizon_label} ahead</h3>
+            <h3>Model comparison for {r.horizon_label} ahead</h3>
+            <p className="muted small">Results from the evaluation study (see Compare Models). Shown for comparison only; they do not change the final alert above.</p>
             <AlertGrid ex={r.explanations} selected={sel} onSelect={setSel} />
             {scen !== 'normal' && (
               <LineChart height={150} yLabel="level" series={[

@@ -87,6 +87,17 @@ export const ALERT_LEVELS = [
   { name: 'Critical', rule: 'above mean + 3 sd', meaning: 'Far above the flood threshold. Counts as an ALERT.' },
 ]
 
+// Beginner-language glossary of what each sensor-reliability check looks for and what the reliability layer
+// actually does about it. Sourced from reliability.py / fusion.py (docs/MATHEMATICAL_MODEL.md §1-2); no numbers.
+export const FAULT_GLOSSARY: [string, string, string][] = [
+  ['Missing', 'A reading is absent for that time step.', 'Reliability is set to 0. The level is replaced by the last trustworthy reading (held, not guessed); rain is treated causally with the other sensors.'],
+  ['Spike', 'A sudden, implausible jump then (often) a jump back.', 'Flagged when the jump is far larger than the station’s normal step-to-step change. Heavily down-weighted, unless recent rain makes a real fast rise plausible.'],
+  ['Stuck', 'The reading stays exactly flat for an unusually long time while rain is falling.', 'Down-weighted: a real river should respond to rain. A flat reading during a dry spell is not flagged (that can be genuine).'],
+  ['Noisy', 'The reading jitters step to step more roughly than the station normally does.', 'Down-weighted in proportion to how much rougher than normal it is, using a per-station noise threshold learned from clean training data.'],
+  ['Out of range', 'The value falls outside the plausible physical range for that sensor.', 'Reliability is set to 0, same as a missing reading.'],
+  ['Conflicting rain', 'Two or more rain sensors disagree by more than normal, or the level rises fast with no rain reported anywhere.', 'With 3+ sensors the odd one out is down-weighted; with exactly 2, neither can be blamed, so both get a mild penalty and the disagreement is recorded separately as an unresolved conflict that widens the uncertainty range instead of being hidden.'],
+]
+
 export const METRIC_HELP: [string, string][] = [
   ['Alert', 'High or Critical. Precision, recall, F1 and FPR treat "alert vs no alert" as a yes/no question.'],
   ['Precision', 'Of the alerts raised, the share that were correct (few false alarms → high precision).'],

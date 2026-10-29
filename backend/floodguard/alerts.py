@@ -13,6 +13,12 @@ from .fuzzy import INPUTS, TERMS
 from .fuzzy.fis import rule_table
 from .suite import MODEL_NAMES
 
+# The single final flood-risk alert the dashboard leads with (docs/MATHEMATICAL_MODEL.md §4: "Flood risk = IT2FIS
+# on the fused point estimates"). PSO-tuned IT2FIS, SOM and ANFIS remain comparison results only; they are never
+# averaged into this value.
+PRIMARY_MODEL = "it2_fis"
+PRIMARY_MODE = "fused"
+
 ADVICE = ["No action needed.", "Keep an eye on the river.", "Be prepared: the river is clearly above normal.",
           "Flood threshold exceeded or expected: follow local warnings.", "Severe: level far above the flood threshold."]
 FLAG_TEXT = {"missing": "is missing", "out_of_range": "is outside the plausible range", "spike": "looks like a spike",

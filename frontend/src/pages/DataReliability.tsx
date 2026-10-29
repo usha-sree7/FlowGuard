@@ -1,7 +1,31 @@
 import { useEffect, useState } from 'react'
 import { api, fmt, MODEL_COLOR, MODELS, RISK, RISK_COLOR } from '../api'
 import { GroupedBars, LineChart, Strip } from '../charts'
+import { FAULT_GLOSSARY } from '../content'
 import { defaultHorizon, useComparison, useDatasetSpec } from '../data'
+
+function Glossary() {
+  return (
+    <div className="panel">
+      <h2>Sensor faults, in plain language</h2>
+      <p className="note">What each check in the reliability layer looks for, and what it actually does about it (not every check applies to every sensor type).</p>
+      <div className="table-scroll">
+        <table className="results">
+          <thead><tr><th>Fault</th><th>What it looks like</th><th>What the reliability layer does</th></tr></thead>
+          <tbody>{FAULT_GLOSSARY.map(([name, what, does]) => <tr key={name}><td><b>{name}</b></td><td>{what}</td><td>{does}</td></tr>)}</tbody>
+        </table>
+      </div>
+      <div className="callout" style={{ marginTop: 12 }}>
+        <b>Three different numbers, not one.</b>
+        <ul className="small" style={{ margin: '6px 0 0' }}>
+          <li><b>Sensor reliability</b> (0&ndash;1, per sensor): how much to trust THIS READING right now. A low reliability does not by itself mean the river is dangerous &mdash; it means that one reading is suspect.</li>
+          <li><b>Confidence status</b> (Confident / Uncertain / Insufficient data): how well-supported the ALERT is, given current sensor conditions. "Confident" does not mean the river is safe; it means the alert level shown, whatever it is, rests on trustworthy data.</li>
+          <li><b>Flood-risk score / alert level</b> (Normal&hellip;Critical): the actual risk estimate itself, from the fuzzy model. This is the only one of the three that answers "how high is the river risk".</li>
+        </ul>
+      </div>
+    </div>
+  )
+}
 
 const FAULTS: [string, string, [string, string][]][] = [
   ['missing', 'Missing readings', [['missing_10', '10 %'], ['missing_30', '30 %']]],
@@ -39,8 +63,12 @@ function DatasetCard({ dataset, d }: { dataset: string; d: any }) {
           {q && <tr><th>Data quality</th><td><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
             <li>{q.rows.toLocaleString()} records, {q.steps_at_nominal.toLocaleString()} exactly one step apart; {q.gaps.toLocaleString()} gaps (largest {fmt(q.largest_gap_hours, 1)} h); {q.duplicate_timestamps} duplicate timestamps.</li>
             <li>Missing values after import: {Object.entries(q.missing_values).map(([k, v]: any) => `${k} ${v}`).join(', ')}.</li>
+            {(q.invalid_level_outside_bounds > 0 || Object.values(q.invalid_negative_rain ?? {}).some((v: any) => v > 0)) && (
+              <li>Invalid values in the processed copy: {q.invalid_level_outside_bounds} level readings outside the plausibility bounds; {Object.entries(q.invalid_negative_rain ?? {}).filter(([, v]: any) => v > 0).map(([k, v]: any) => `${v} negative ${k}`).join(', ') || 'no negative rain values'}.</li>
+            )}
             {q.reader_checks?.level_removed_outside_bounds !== undefined && <li>Removed as implausible: {q.reader_checks.level_removed_outside_bounds} level readings outside {q.reader_checks.level_bounds_m.join('–')} m; {q.reader_checks.rain_records_above_limit_set_missing} rain readings above {q.reader_checks.rain_limit_mm_per_h} mm/h set to missing.</li>}
             {q.reader_checks?.rain_hours_assumed_zero !== undefined && <li>{q.reader_checks.rain_hours_assumed_zero.toLocaleString()} of {q.rows.toLocaleString()} hours have no rain record and are assumed dry (0 mm): the source lists non-zero rain only.</li>}
+            <li className="muted">These are real data-quality issues found when this dataset was imported from its raw source file(s) -- not the simulated sensor faults used for robustness testing below.</li>
           </ul></td></tr>}
           <tr><th>Label generation</th><td>
             <b>No recorded flood events exist in this dataset</b>, so labels are <b>proxy labels</b>. The label for time t at horizon h is the alert level of the water level <i>actually observed</i> at t + h,
@@ -49,6 +77,8 @@ function DatasetCard({ dataset, d }: { dataset: string; d: any }) {
           </td></tr>
           {meta && <tr><th>Chronological split</th><td>Fit {meta.train.first} → {meta.train.fit_last} ({meta.train.fit_rows.toLocaleString()} rows) · validation → {meta.train.last} ({meta.train.validation_rows.toLocaleString()}) · <b>test {meta.test.first} → {meta.test.last}</b> ({meta.test.rows.toLocaleString()}). No shuffling.</td></tr>}
           <tr><th>Known limitations</th><td><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{spec.limitations.map((l: string) => <li key={l}>{l}</li>)}</ul></td></tr>
+          {spec.unverified?.length > 0 && <tr><th>Not independently verified</th><td><ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{spec.unverified.map((l: string) => <li key={l}>{l}</li>)}</ul>
+            <p className="muted small" style={{ margin: '4px 0 0' }}>Listed here rather than stated as fact: these items could not be checked against an independent source.</p></td></tr>}
         </tbody></table>
       </div>
 
@@ -123,6 +153,8 @@ function FaultLab({ dataset, d }: { dataset: string; d: any }) {
         <h2>Sensor reliability: what happens when sensors fail?</h2>
         <p className="note">Pick a fault. All four models receive exactly the same corrupted readings. With the reliability layer <b>off</b>, the models use the readings as they are.
           With it <b>on</b>, every reading is first checked (missing, spike, stuck, noisy, out-of-range, disagreement between rain sensors), down-weighted by its reliability and fused.</p>
+        <p className="muted small" style={{ marginTop: 6 }}>These faults below are <b>artificially injected</b> into a copy of the test data for this experiment &mdash; they are not recorded sensor failures.
+          The real, documented data-quality issues found in this dataset's own raw files are listed above, under "Data quality".</p>
         <div className="chips" style={{ marginTop: 10 }}>
           {FAULTS.map(([k, n, v]) => <button key={k} className={`chip ${fam === k ? 'on' : ''}`} onClick={() => { setFam(k); setScen(v[v.length - 1][0]) }}>{n}</button>)}
         </div>
@@ -200,6 +232,7 @@ export default function DataReliability({ dataset }: { dataset: string }) {
   return (
     <div className="stack">
       <DatasetCard dataset={dataset} d={d} />
+      <Glossary />
       {err && <div className="panel error">No stored evaluation: {err}</div>}
       {d && <HorizonCheck d={d} />}
       {d && <FaultLab dataset={dataset} d={d} />}

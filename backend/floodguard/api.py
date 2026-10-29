@@ -12,7 +12,7 @@ from functools import lru_cache
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from . import MODEL_VERSION, config
 from .calibration import split
 from .datasets import DATASETS, NOT_INTEGRATED, DatasetError, import_dataset, is_loaded, load_processed, load_quality
+from .datasets import custom as lab
 from .datasets.loaders import manual_instructions
 from .experiment import _clean_json, list_runs, load_run, make_config, run_experiment
 from .faults import SCENARIO_DOC, SCENARIOS, inject
@@ -68,7 +69,7 @@ def _num(a):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "model_version": MODEL_VERSION}
+    return {"ok": True, "model_version": MODEL_VERSION, "read_only": config.READ_ONLY}
 
 
 @app.get("/api/datasets")
@@ -317,6 +318,7 @@ def replay(ds_id: str, scenario: str = "clean", offset: int = 0, limit: int = 96
         "models": {k: _num(hz["cls"][mode][k][sl]) for k in RISK_MODELS}, "model_names": MODEL_NAMES,
         "proxy_label": _num(labels[sl]), "future_level": _num(fut[sl]), "injected_fault": _num(any_fault[sl]),
         "explanations": {m: alerts.explain(suite, sh, hz, h, i, m, mode) for m in RISK_MODELS},
+        "primary": alerts.explain(suite, sh, hz, h, i, alerts.PRIMARY_MODEL, alerts.PRIMARY_MODE),
         "outcome": {"timestamp": test["timestamp"].iloc[i] or f"day {i}", "future_level": _num(fut[i:i + 1])[0],
                     "proxy_label": _num(labels[i:i + 1])[0],
                     "proxy_class": None if np.isnan(labels[i]) else config.RISK_CLASSES[int(labels[i])]},
@@ -371,10 +373,76 @@ def assess(ds_id: str, req: AssessRequest):
         "horizon": h, "horizon_label": suite.horizons[h], "scenario": req.scenario, "mode": req.mode,
         "scenario_description": demo.SENSOR_SCENARIOS[req.scenario],
         "explanations": {m: alerts.explain(suite, sh, hz, h, i, m, req.mode, demo=True) for m in RISK_MODELS},
+        "primary": alerts.explain(suite, sh, hz, h, i, alerts.PRIMARY_MODEL, alerts.PRIMARY_MODE, demo=True),
         "history": {"level_true": _num(true_level), "level_sensor": _num(hist["level"].to_numpy()),
                     "level_fused": _num(p["fused"]["level_c"]),
                     "rain_sensors": {s: _num(hist[f"rain__{s}"].to_numpy()) for s in suite.pipe.cal.cfg.rain_sensors}},
     }
+
+
+# --------------------------------------------------------------------------- dataset lab (upload your own CSV)
+# Uploads are kept in server memory only (floodguard/datasets/custom.py); never written to data/raw,
+# data/processed or results/, so they cannot overwrite or be confused with the three curated datasets above.
+# Only the primary model (IT2FIS, reliability-fused) is fitted and run -- see custom.py's module docstring.
+
+class LabMapping(BaseModel):
+    timestamp: str | None = None
+    level: str
+    rain: list[str]
+    step_hours: float | None = None
+
+
+class LabAnalyzeRequest(BaseModel):
+    horizon_steps: int | None = None
+
+
+@app.post("/api/lab/upload")
+async def lab_upload(file: UploadFile = File(...)):
+    _writable()
+    data = await file.read()
+    try:
+        upload_id, info = lab.new_upload(file.filename or "upload.csv", data)
+    except lab.LabError as e:
+        raise HTTPException(422, str(e))
+    return info
+
+
+@app.get("/api/lab/{upload_id}")
+def lab_state(upload_id: str):
+    try:
+        return lab.get_state(upload_id)
+    except lab.LabNotFound as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/lab/{upload_id}/preview")
+def lab_preview(upload_id: str):
+    try:
+        return lab.preview(upload_id)
+    except lab.LabNotFound as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/lab/{upload_id}/map")
+def lab_map(upload_id: str, mapping: LabMapping):
+    _writable()
+    try:
+        return lab.set_mapping(upload_id, mapping.timestamp, mapping.level, mapping.rain, mapping.step_hours)
+    except lab.LabNotFound as e:
+        raise HTTPException(404, str(e))
+    except lab.LabError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/lab/{upload_id}/analyze")
+def lab_analyze(upload_id: str, req: LabAnalyzeRequest):
+    _writable()
+    try:
+        return lab.analyze(upload_id, req.horizon_steps)
+    except lab.LabNotFound as e:
+        raise HTTPException(404, str(e))
+    except lab.LabError as e:
+        raise HTTPException(422, str(e))
 
 
 # --------------------------------------------------------------------------- references

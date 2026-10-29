@@ -3,6 +3,38 @@ import { Meter } from './charts'
 
 export const LevelChip = ({ c }: { c: number }) => <span className="level-chip" style={{ background: RISK_COLOR[c] }}>{RISK[c]}</span>
 
+// The one alert the dashboard leads with: IT2FIS on reliability-fused inputs (docs/MATHEMATICAL_MODEL.md §4).
+// Backend-computed only; this component never averages or re-derives a risk level of its own.
+export function FinalAlert({ e, demo }: { e: any; demo?: boolean }) {
+  const insufficient = e.status === 'Insufficient data'
+  const c = insufficient ? 'var(--st-ins)' : RISK_COLOR[e.risk_class]
+  return (
+    <div className="final-alert" style={{ borderColor: c }}>
+      <div className="row-between">
+        <span className="final-tag">Final flood-risk alert · IT2FIS, reliability-fused</span>
+        {e.status && <span className="status-chip" style={{ color: STATUS_COLOR[e.status], borderColor: STATUS_COLOR[e.status] }}>{e.status}</span>}
+      </div>
+      {demo && <span className="demo-tag" style={{ marginTop: 6 }}>HYPOTHETICAL INPUT · not an evaluated prediction · not an official warning</span>}
+      <div className="final-big" style={{ color: c }}>{insufficient ? 'INSUFFICIENT DATA' : `${e.risk.toUpperCase()}${e.alert ? ' · ALERT' : ''}`}</div>
+      <p className="final-advice">{insufficient ? 'Sensor readings are too unreliable right now for a confident alert. Treat this as unknown risk, not as "Normal".' : e.advice}</p>
+      {e.score !== null && <p className="muted small" style={{ margin: '0 0 8px' }}>
+        Risk score {fmt(e.score, 1)} / 100{e.U !== null ? ` · uncertainty index U = ${fmt(e.U, 0)}/100` : ''}</p>}
+      <h4>Why this alert</h4>
+      <ol className="reasons">{e.reasons.slice(0, 4).map((r: string, i: number) => <li key={i}>{r}</li>)}</ol>
+      <h4>Sensor reliability</h4>
+      <div className="row" style={{ gap: 8 }}>
+        {e.sensors.map((s: any) => (
+          <span key={s.sensor} className="sensor-chip" style={{ borderColor: s.reliability < 0.5 ? 'var(--risk4)' : 'var(--border)' }}>
+            {s.sensor}: {fmt(s.reliability, 2)}{s.flags.length > 0 ? ` · ${s.flags.join(', ')}` : ''}
+          </span>
+        ))}
+      </div>
+      <p className="muted small" style={{ marginTop: 10, marginBottom: 0 }}>
+        PSO-tuned IT2FIS, SOM and ANFIS are shown below as <b>comparison results</b> from the evaluation study. They are not averaged into this alert and do not change it.</p>
+    </div>
+  )
+}
+
 // One card per model with its alert level; clicking a card selects whose explanation is shown below.
 export function AlertGrid({ ex, selected, onSelect }: { ex: Record<string, any>; selected: string; onSelect: (m: string) => void }) {
   return (

@@ -3,6 +3,7 @@ import { api } from './api'
 import Assess from './pages/Assess'
 import Compare from './pages/Compare'
 import DataReliability from './pages/DataReliability'
+import DatasetLab from './pages/DatasetLab'
 import Overview from './pages/Overview'
 
 const TABS = [
@@ -10,6 +11,7 @@ const TABS = [
   { id: 'assess', label: 'Assess Risk' },
   { id: 'compare', label: 'Compare Models' },
   { id: 'data', label: 'Dataset & Sensor Reliability' },
+  { id: 'lab', label: 'Dataset Lab' },
 ] as const
 
 type Tab = (typeof TABS)[number]['id']
@@ -74,7 +76,6 @@ export default function App() {
             <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
               <option value="bengalas">Bengalas River, Brazil · 30 min</option>
               <option value="malwathu">Malwathu Oya, Sri Lanka · daily</option>
-              <option value="cwc_chindnar">Indravati at Chindnar, India (CWC) · hourly</option>
             </select>
           </label>
         </div>
@@ -85,8 +86,9 @@ export default function App() {
       <main className="app">
         {backend === 'down' && <div className="error panel">Backend not reachable. Start it with <code>python -m uvicorn floodguard.api:app --port 8000</code> from <code>backend/</code>.</div>}
         {backend === '?' && <div className="panel muted">Connecting to the analysis server…</div>}
-        {backend === 'ok' && !loaded[dataset] && <ImportPanel dataset={dataset} onDone={refresh} />}
-        {backend === 'ok' && loaded[dataset] && (
+        {backend === 'ok' && tab === 'lab' && <DatasetLab />}
+        {backend === 'ok' && tab !== 'lab' && !loaded[dataset] && <ImportPanel dataset={dataset} onDone={refresh} />}
+        {backend === 'ok' && tab !== 'lab' && loaded[dataset] && (
           <>
             {tab === 'overview' && <Overview key={dataset} dataset={dataset} go={go} />}
             {tab === 'assess' && <Assess key={dataset} dataset={dataset} />}
