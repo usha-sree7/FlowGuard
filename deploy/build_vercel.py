@@ -44,6 +44,7 @@ def main() -> None:
         for name in ("results.json", "summary.csv"):
             if (run / name).exists():
                 shutil.copy2(run / name, out / name)
+    (BUILD / "bundle" / "results").mkdir(parents=True, exist_ok=True)
     for f in (ROOT / "results").glob("comparison_*.json"):
         shutil.copy2(f, BUILD / "bundle" / "results" / f.name)
     shutil.copytree(dist, BUILD / "public")
