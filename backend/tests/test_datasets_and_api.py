@@ -80,3 +80,81 @@ def test_failed_download_gives_manual_instructions_and_is_not_loaded(tmp_path, m
 def test_cwc_episodes_fall_back_to_highest_level_reached():
     ep = TestClient(app).get("/api/episodes/cwc_chindnar").json()
     assert ep["episode_class"] == "Moderate" and ep["total"] > 0  # no High level in the Chindnar test period
+
+
+def _lab_csv_text() -> str:
+    """A small synthetic CSV with the same column-naming pattern a real user would upload
+    (timestamp / rainfall / water_level), independent of any curated dataset."""
+    rng = np.random.default_rng(1)
+    n = 400
+    lines = ["timestamp,water_level,rainfall"]
+    for i in range(n):
+        ts = f"2024-01-{1 + i // 24:02d} {i % 24:02d}:00:00"
+        rain = max(0.0, float(rng.gamma(0.4, 2.0) - 0.3)) if rng.random() < 0.4 else 0.0
+        level = 5.0 + 0.02 * np.sin(i / 20) + 0.01 * rng.normal()
+        lines.append(f"{ts},{level:.4f},{rain:.2f}")
+    return "\n".join(lines) + "\n"
+
+
+def test_lab_upload_map_analyze_flow():
+    """Exercises the exact stateless Dataset Lab flow the frontend's Upload/Validate/Run-analysis
+    buttons drive: POST /api/lab/upload (multipart), then POST /api/lab/map and POST /api/lab/analyze
+    with the csv_text carried in the JSON body (no upload_id in the URL -- see custom.py's docstring
+    on why this must be stateless). Also guards against the exact failure mode a stale '/api/lab/
+    {upload_id}' GET route would cause: a POST to a literal 2-segment path like /api/lab/map getting
+    matched by path but rejected for method (405), if such a parameterised route were ever reintroduced."""
+    c = TestClient(app)
+    csv_text = _lab_csv_text()
+
+    up = c.post("/api/lab/upload", files={"file": ("sensors.csv", csv_text, "text/csv")})
+    assert up.status_code == 200, up.text
+    body = up.json()
+    assert body["csv_text"] == csv_text
+    assert body["suggested_mapping"]["level"] == "water_level"
+    assert body["suggested_mapping"]["rain"] == ["rainfall"]
+    assert body["suggested_mapping"]["timestamp"] == "timestamp"
+
+    # the exact request shape MappingForm.validate() sends
+    map_req = {"csv_text": csv_text, "timestamp": "timestamp", "level": "water_level",
+              "rain": ["rainfall"], "step_hours": None}
+    mapped = c.post("/api/lab/map", json=map_req)
+    assert mapped.status_code == 200, mapped.text
+    mres = mapped.json()
+    assert mres["ready"] is True and mres["errors"] == []
+
+    # the exact request shape Results.run() sends
+    an_req = {**map_req, "filename": "sensors.csv", "horizon_steps": None}
+    analyzed = c.post("/api/lab/analyze", json=an_req)
+    assert analyzed.status_code == 200, analyzed.text
+    ares = analyzed.json()
+    assert ares["primary_model"] == "it2_fis" and ares["primary_mode"] == "fused"
+    assert ares["models_not_run"] == ["PSO-tuned IT2FIS", "SOM", "ANFIS"]
+    assert ares["primary"]["risk"] in ("Normal", "Low", "Moderate", "High", "Critical")
+
+    # no stale upload_id-based route should exist: this exact path shape is what previously
+    # produced a 405 when a leftover GET /api/lab/{upload_id} matched it by path but not by method
+    assert c.get("/api/lab/map").status_code == 404
+    assert c.get("/api/lab/anything").status_code == 404
+
+
+def test_lab_no_timestamp_with_fixed_interval():
+    """The timestamp-optional path: leaving timestamp unmapped is valid as long as a fixed sampling
+    interval is given (see custom.py `_build_standard`); this must not require a timestamp column."""
+    c = TestClient(app)
+    csv_text = _lab_csv_text()
+    req = {"csv_text": csv_text, "timestamp": None, "level": "water_level", "rain": ["rainfall"], "step_hours": 1.0}
+    mapped = c.post("/api/lab/map", json=req)
+    assert mapped.status_code == 200 and mapped.json()["ready"] is True
+
+    analyzed = c.post("/api/lab/analyze", json={**req, "filename": "sensors.csv", "horizon_steps": None})
+    assert analyzed.status_code == 200, analyzed.text
+    assert "no timestamp mapped" in analyzed.json()["primary"]["timestamp"]
+
+    # leaving BOTH timestamp and step_hours unset must be a clear validation error, not a crash.
+    # Ordinary mapping-validation failures return 200 with ready=False (as MappingForm.validate()
+    # expects); 422 is reserved for genuine errors like an unparseable file -- see custom.py/api.py.
+    bad = c.post("/api/lab/map", json={**req, "step_hours": None})
+    assert bad.status_code == 200
+    bres = bad.json()
+    assert bres["ready"] is False
+    assert any("timestamp" in e.lower() for e in bres["errors"])
